@@ -1,0 +1,62 @@
+name: Triển Khai Tự Động Lên VPS Vultr
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to Vultr VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      # Bước 1: Checkout mã nguồn mới nhất từ GitHub
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # Bước 2: Khởi tạo Node.js để kiểm thử nhanh cấu trúc gói
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      # Bước 3: Cài đặt sạch dependencies ở runner để kiểm tra tính toàn vẹn
+      - name: Install Dependencies
+        run: npm ci
+
+      # Bước 4: Đẩy mã nguồn sạch lên thư mục tạm trên VPS qua giao thức SCP bảo mật
+      - name: Copy Code to VPS Temporary Staging
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          source: "./*"
+          target: "/var/www/shopee-lark-bot/tmp_build"
+          rm: true # Xóa thư mục tmp_build cũ trên VPS trước khi copy bản mới lên
+
+      # Bước 5: Đăng nhập SSH từ xa và kích hoạt kịch bản deploy.sh an toàn trên VPS
+      - name: Execute Remote Deployment Script
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          script: |
+            echo "--- BẮT ĐẦU QUY TRÌNH DEPLOY TRÊN VPS VULTR ---"
+            cd /var/www/shopee-lark-bot/tmp_build
+            
+            # Đảm bảo script deploy.sh có quyền thực thi
+            chmod +x scripts/deploy/deploy.sh
+            
+            # Khởi chạy script deploy chính
+            ./scripts/deploy/deploy.sh
+            
+            # Dọn dẹp thư mục tmp_build sau khi deploy hoàn tất thành công
+            echo "--- DỌN DẸP THƯ MỤC TẠM ---"
+            rm -rf /var/www/shopee-lark-bot/tmp_build
+            echo "--- HOÀN TẤT TRIỂN KHAI THÀNH CÔNG RỰC RỠ! ---"
