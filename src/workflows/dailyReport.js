@@ -71,7 +71,7 @@ async function runDailyReport({ shopId } = {}) {
         ...marketplaceReport,
         shopName: process.env.SHOP_NAME || 'LUXI DECOR (Shopee Sapo Go)',
         growthPercent,
-        aiAnalysis: aiAnalysis || `💡 **Phân tích Hiệu suất Shopee Marketplace:**\n- **Doanh thu Shopee:** Đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.totalRevenue)} VNĐ** từ **${marketplaceReport.totalOrders} đơn hàng** thành công.\n- **Kỳ trước:** Doanh thu hôm trước đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.dayBeforeRevenue)} VNĐ** (tăng trưởng **${growthPercent}%**).`
+        aiAnalysis: aiAnalysis || `💡 **Phân tích Hiệu suất Shopee Marketplace:**\n- **Doanh thu thực nhận (Net):** Đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.netRevenue)} VNĐ** (sau khi đã khấu trừ **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.fees.total)} VNĐ** chi phí sàn Shopee).\n- **Tổng đơn hàng:** **${marketplaceReport.totalOrders} đơn** thành công (TB đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.avgPerOrder)} VNĐ/đơn**).\n- **Tăng trưởng:** Kỳ trước doanh thu đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.dayBeforeRevenue)} VNĐ**.`
       };
 
       // Gửi báo cáo lên Lark

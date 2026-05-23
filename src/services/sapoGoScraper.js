@@ -299,6 +299,40 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
   const productsUrl = `${baseUrl}/analytics/products?ids=${connectionIds}&from=${timeFrom}&to=${timeTo}&sortField=revenue&sortType=up&limit=5`;
   const productsRes = await axios.get(productsUrl, { headers: authHeaders });
 
+  // 5. CÀO CHI PHÍ VÀ PHÍ SÀN SHOPEE CHI TIẾT (Lấy theo từng connection ID đang hoạt động)
+  const activeConnIds = connectionIds.split(',').map(id => id.trim()).filter(Boolean);
+  logger.info(`📡 [SAPO GO SCRAPE] Đang cào chi phí chi tiết cho ${activeConnIds.length} gian hàng Shopee...`);
+  
+  const feePromises = activeConnIds.map(async (connId) => {
+    const feeUrl = `${baseUrl}/analytics/fees/1?ids=${connId}&group=day&from=${timeFrom}&to=${timeTo}&zone=Asia/Saigon`;
+    try {
+      const res = await axios.get(feeUrl, { headers: authHeaders, timeout: 5000 });
+      const feeObj = res.data?.fee || { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
+      return {
+        connId,
+        fee: feeObj
+      };
+    } catch (err) {
+      logger.error(`❌ [SAPO GO SCRAPE] Lỗi lấy chi phí cho shop #${connId}: ${err.message}`);
+      return {
+        connId,
+        fee: { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 }
+      };
+    }
+  });
+
+  const feeResults = await Promise.all(feePromises);
+  const feeMap = {};
+  feeResults.forEach(item => {
+    feeMap[item.connId] = item.fee;
+  });
+
+  // Tính tổng chi phí sàn toàn cục
+  const totalSellerFee = feeResults.reduce((acc, item) => acc + Number(item.fee.total || 0), 0);
+  const totalTransactionFee = feeResults.reduce((acc, item) => acc + Number(item.fee.seller_transaction_fee || 0), 0);
+  const totalCommissionFee = feeResults.reduce((acc, item) => acc + Number(item.fee.commission_fee || 0), 0);
+  const totalServiceFee = feeResults.reduce((acc, item) => acc + Number(item.fee.service_fee || 0), 0);
+
   // Trích xuất số liệu hôm qua
   const revenuesList = revenueRes.data?.revenues || [];
   const yesterdayRevenueObj = revenuesList.find(r => r.time === reportDate) || { total: 0, quantity: 0, average: 0 };
@@ -318,10 +352,18 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     if (excludedShops.includes(name.trim().toLowerCase())) {
       return; // Bỏ qua shop đã bị khai tử
     }
+    const shopFee = feeMap[id] || { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
     shopeeShopBreakdown[name] = {
       revenue: 0,
       orders: 0,
-      cancelledCount: 0
+      cancelledCount: 0,
+      fees: {
+        total: Number(shopFee.total || 0),
+        transaction: Number(shopFee.seller_transaction_fee || 0),
+        commission: Number(shopFee.commission_fee || 0),
+        service: Number(shopFee.service_fee || 0)
+      },
+      netRevenue: 0 - Number(shopFee.total || 0)
     };
   });
 
@@ -330,10 +372,18 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     if (excludedShops.includes(name.trim().toLowerCase())) {
       return; // Bỏ qua shop đã bị khai tử
     }
+    const shopFee = feeMap[b.connection_id] || { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
     shopeeShopBreakdown[name] = {
       revenue: Number(b.current_total || 0),
       orders: Number(b.quantity || 0),
-      cancelledCount: 0
+      cancelledCount: 0,
+      fees: {
+        total: Number(shopFee.total || 0),
+        transaction: Number(shopFee.seller_transaction_fee || 0),
+        commission: Number(shopFee.commission_fee || 0),
+        service: Number(shopFee.service_fee || 0)
+      },
+      netRevenue: Number(b.current_total || 0) - Number(shopFee.total || 0)
     };
   });
 
@@ -361,6 +411,15 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     shippingCount: Number(liveTasks.shipping || 0),
     totalDiscount: 0,
     totalShippingFee: 0,
+    // Báo cáo chi phí toàn cục
+    fees: {
+      total: totalSellerFee,
+      transaction: totalTransactionFee,
+      commission: totalCommissionFee,
+      service: totalServiceFee
+    },
+    netRevenue: Number(yesterdayRevenueObj.total || 0) - totalSellerFee,
+    feeRate: Number(yesterdayRevenueObj.total || 0) > 0 ? Math.round((totalSellerFee / Number(yesterdayRevenueObj.total || 0)) * 1000) / 10 : 0,
     shopeeShopBreakdown,
     topProducts,
     dayBeforeRevenue: Number(dayBeforeRevenueObj.total || 0),

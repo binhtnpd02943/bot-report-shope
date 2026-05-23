@@ -369,6 +369,10 @@ function buildMessageCard(data) {
     pendingConfirmationCount = 0,
     totalDiscount = 0,
     totalShippingFee = 0,
+    // Phí sàn và Doanh thu thực nhận toàn cục
+    fees = { total: 0, transaction: 0, commission: 0, service: 0 },
+    netRevenue = 0,
+    feeRate = 0,
     shopeeShopBreakdown = {},
     aiAnalysis,
     growthPercent,
@@ -376,7 +380,7 @@ function buildMessageCard(data) {
     topProducts = [],
   } = data;
 
-  // Màu header theo tăng/giảm doanh thu
+  // Màu header theo tăng/giảm doanh thu thực nhận (hoặc doanh thu gốc)
   const headerColor = growthPercent >= 0 ? 'green' : 'red';
   const growthIcon = growthPercent >= 0 ? '📈' : '📉';
   const growthText =
@@ -386,31 +390,38 @@ function buildMessageCard(data) {
 
   // Format số tiền VNĐ
   const fmtVND = (n) => new Intl.NumberFormat('vi-VN').format(n) + ' VNĐ';
+  const fmtVNDShort = (n) => new Intl.NumberFormat('vi-VN').format(n);
 
-  // 🏪 Bảng phân chia theo cửa hàng Shopee
+  // 🏪 Bảng phân chia theo cửa hàng Shopee (Thiết kế dạng bảng P&L rút gọn)
   let breakdownMarkdown = '';
   const breakdownKeys = Object.keys(shopeeShopBreakdown || {});
   if (breakdownKeys.length > 0) {
     breakdownMarkdown =
-      `### 🏪 DOANH THU THEO CỬA HÀNG\n` +
-      `| Cửa hàng | Đơn hàng | Hủy | Doanh số |\n` +
-      `| :--- | :---: | :---: | :--- |\n` +
+      `### 🏪 PHÂN BỔ THEO CỬA HÀNG *(Đơn vị: VNĐ)*\n` +
+      `| Cửa hàng | Đơn | Doanh số | Phí sàn | Thực nhận |\n` +
+      `| :--- | :---: | :--- | :--- | :--- |\n` +
       Object.entries(shopeeShopBreakdown)
         .map(
-          ([name, stats]) =>
-            `| **${name}** | ${stats.orders} đơn | ${stats.cancelledCount} | **${fmtVND(stats.revenue)}** |`,
+          ([name, stats]) => {
+            const shopFee = stats.fees || { total: 0 };
+            const netRev = stats.netRevenue != null ? stats.netRevenue : (stats.revenue - shopFee.total);
+            return `| **${name}** | ${stats.orders} | ${fmtVNDShort(stats.revenue)} | -${fmtVNDShort(shopFee.total)} | **${fmtVNDShort(netRev)}** |`;
+          }
         )
         .join('\n');
   }
 
-  // 💸 Chi phí & Khấu trừ Shopee (Discounts & Shipping Fees)
+  // 💸 Chi phí & Khấu trừ Shopee chi tiết (Discounts & Shipping Fees)
   const totalOriginal = totalRevenue + totalDiscount;
   const deductionsMarkdown =
-    `### 💸 CHI TIẾT KHẤU TRỪ & CHI PHÍ\n` +
-    `- **Doanh số gốc (chưa trừ KM):** ${fmtVND(totalOriginal)}\n` +
-    `- **Số tiền giảm giá (Khuyến mãi shop):** \`-${fmtVND(totalDiscount)}\`\n` +
-    `- **Phí vận chuyển phát sinh:** \`${fmtVND(totalShippingFee)}\`\n` +
-    `- **Doanh số thực nhận (sau khi trừ KM):** **${fmtVND(totalRevenue)}**`;
+    `### 💸 CHI TIẾT KHẤU TRỪ & CHI PHÍ SÀN\n` +
+    `- **Doanh số gốc (Gross Sales):** ${fmtVND(totalOriginal)}\n` +
+    `- **Chi phí sàn Shopee:** \`-${fmtVND(fees.total)}\` (Chiếm **${feeRate}%** doanh số)\n` +
+    `  * *💳 Phí thanh toán:* -${fmtVND(fees.transaction)}\n` +
+    `  * *📌 Phí cố định:* -${fmtVND(fees.commission)}\n` +
+    `  * *🛍️ Phí dịch vụ (Voucher/Freeship):* -${fmtVND(fees.service)}\n` +
+    `- **Khuyến mãi shop (nếu có):** \`-${fmtVND(totalDiscount)}\`\n` +
+    `- **DOANH THU THỰC NHẬN (Net):** **${fmtVND(netRevenue)}**`;
 
   // Card theo chuẩn Lark Card DSL
   const card = {
@@ -422,28 +433,29 @@ function buildMessageCard(data) {
     header: {
       title: {
         tag: 'plain_text',
-        content: `📊 BÁO CÁO DOANH THU SHOPEE DAILY`,
+        content: `📊 BÁO CÁO TÀI CHÍNH SHOPEE DAILY`,
       },
       subtitle: {
         tag: 'plain_text',
-        content: shopName ? `🏪 ${shopName}` : '🏪 Cửa hàng của bạn',
+        content: shopName ? `🏪 ${shopName}` : '🏪 Hệ Thống Cửa Hàng LUXI',
       },
       template: headerColor,
     },
     body: {
       direction: 'vertical',
       elements: [
-        // Ngày báo cáo
+        // Ngày báo cáo & Doanh thu thực nhận nổi bật nhất
         {
           tag: 'div',
           text: {
             tag: 'lark_md',
-            content: `**📅 Ngày báo cáo:** ${reportDate}  (Dữ liệu ngày hôm qua)`,
+            content: `**📅 Ngày báo cáo:** ${reportDate}  (Dữ liệu ngày hôm qua)\n` +
+                     `👉 **DOANH THU THỰC NHẬN (NET REVENUE):** **${fmtVND(netRevenue)}**`,
           },
         },
         { tag: 'hr' },
 
-        // Số liệu chính - layout 3 cột (Đơn hàng | Sản phẩm | Doanh số)
+        // Số liệu chính - layout 3 cột (Đơn hàng | Doanh số Gross | Phí sàn Shopee)
         {
           tag: 'column_set',
           flex_mode: 'stretch',
@@ -452,7 +464,7 @@ function buildMessageCard(data) {
             {
               tag: 'column',
               width: 'weighted',
-              weight: 1.2,
+              weight: 1.1,
               elements: [
                 {
                   tag: 'div',
@@ -466,13 +478,13 @@ function buildMessageCard(data) {
             {
               tag: 'column',
               width: 'weighted',
-              weight: 1.2,
+              weight: 1.4,
               elements: [
                 {
                   tag: 'div',
                   text: {
                     tag: 'lark_md',
-                    content: `**🛍️ SẢN PHẨM**\n**${totalProducts || totalOrders}** cái`,
+                    content: `**💰 TỔNG DOANH SỐ (Gross)**\n**${fmtVND(totalRevenue)}**`,
                   },
                 },
               ],
@@ -486,7 +498,7 @@ function buildMessageCard(data) {
                   tag: 'div',
                   text: {
                     tag: 'lark_md',
-                    content: `**💰 DOANH SỐ**\n**${fmtVND(totalRevenue)}**`,
+                    content: `**💸 PHÍ SÀN (${feeRate}%)**\n**-${fmtVND(fees.total)}**`,
                   },
                 },
               ],
@@ -676,7 +688,7 @@ function buildMessageCard(data) {
           tag: 'div',
           text: {
             tag: 'lark_md',
-            content: `*🤖 Báo cáo tự động lúc ${new Date().toLocaleTimeString('vi-VN')} — Shopee Sapo Stateless Bot*`,
+            content: `*🤖 Báo cáo tự động lúc ${new Date().toLocaleTimeString('vi-VN')} — Shopee Sapo Financial Bot*`,
           },
         },
       ],
