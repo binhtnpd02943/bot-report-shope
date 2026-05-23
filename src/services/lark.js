@@ -372,21 +372,29 @@ function buildMessageCard(data) {
     // Phí sàn và Doanh thu thực nhận toàn cục
     fees = { total: 0, transaction: 0, commission: 0, service: 0 },
     netRevenue = 0,
+    expectedNetRevenue = 0,
     feeRate = 0,
     shopeeShopBreakdown = {},
     aiAnalysis,
     growthPercent,
+    actualNetGrowthPercent,
+    expectedNetGrowthPercent,
     shopName,
     topProducts = [],
   } = data;
 
-  // Màu header theo tăng/giảm doanh thu thực nhận (hoặc doanh thu gốc)
-  const headerColor = growthPercent >= 0 ? 'green' : 'red';
-  const growthIcon = growthPercent >= 0 ? '📈' : '📉';
-  const growthText =
-    growthPercent != null
-      ? `${growthIcon} ${Math.abs(growthPercent).toFixed(1)}% so với kỳ trước`
-      : '📊 Không có dữ liệu so sánh';
+  // Định dạng hiển thị Tăng trưởng
+  const fmtGrowth = (val) => {
+    if (val === null || val === undefined) return '📊 Không có dữ liệu';
+    const icon = val >= 0 ? '📈' : '📉';
+    return `${icon} ${val >= 0 ? 'Tăng' : 'Giảm'} ${Math.abs(val).toFixed(1)}%`;
+  };
+
+  const actualGrowthText = fmtGrowth(actualNetGrowthPercent !== undefined ? actualNetGrowthPercent : growthPercent);
+  const expectedGrowthText = fmtGrowth(expectedNetGrowthPercent);
+
+  // Màu header theo tăng/giảm dòng tiền thực tế đã về ví
+  const headerColor = (actualNetGrowthPercent !== undefined ? actualNetGrowthPercent : growthPercent) >= 0 ? 'green' : 'red';
 
   // Format số tiền VNĐ
   const fmtVND = (n) => new Intl.NumberFormat('vi-VN').format(n) + ' VNĐ';
@@ -421,7 +429,10 @@ function buildMessageCard(data) {
     `  * *📌 Phí cố định:* -${fmtVND(fees.commission)}\n` +
     `  * *🛍️ Phí dịch vụ (Voucher/Freeship):* -${fmtVND(fees.service)}\n` +
     `- **Khuyến mãi shop (nếu có):** \`-${fmtVND(totalDiscount)}\`\n` +
-    `- **DOANH THU THỰC NHẬN (Net):** **${fmtVND(netRevenue)}**`;
+    `- **DOANH THU THỰC NHẬN DỰ KIẾN (Net dự kiến):** **${fmtVND(expectedNetRevenue)}**\n` +
+    `  * *(Bằng Gross trừ đi Chi phí sàn Shopee ước tính của các đơn phát sinh hôm qua)*\n` +
+    `- **DOANH THU THỰC NHẬN ĐÃ VỀ VÍ (Net thực tế):** **${fmtVND(netRevenue)}**\n` +
+    `  * *(Dòng tiền mặt sạch thực tế Shopee đã đối soát & trả về ví thành công hôm qua)*`;
 
   // Card theo chuẩn Lark Card DSL
   const card = {
@@ -429,6 +440,7 @@ function buildMessageCard(data) {
     config: {
       wide_screen_mode: true,
       enable_forward: true,
+      width_mode: 'sparse',
     },
     header: {
       title: {
@@ -444,13 +456,18 @@ function buildMessageCard(data) {
     body: {
       direction: 'vertical',
       elements: [
-        // Ngày báo cáo & Doanh thu thực nhận nổi bật nhất
+        // Ngày báo cáo & Doanh thu thực nhận nổi bật nhất (Cả 2 loại để sếp phân biệt)
         {
           tag: 'div',
           text: {
             tag: 'lark_md',
-            content: `**📅 Ngày báo cáo:** ${reportDate}  (Dữ liệu ngày hôm qua)\n` +
-                     `👉 **DOANH THU THỰC NHẬN (NET REVENUE):** **${fmtVND(netRevenue)}**`,
+            content: `**📅 Ngày báo cáo:** ${reportDate} (Dữ liệu ngày hôm qua)\n\n` +
+                     `💰 **NET THỰC NHẬN ĐÃ VỀ VÍ (Dòng tiền thực tế):** **${fmtVND(netRevenue)}**\n` +
+                     `* *Tăng trưởng dòng tiền:* **${actualGrowthText}** (so với kỳ trước: ${fmtVNDShort(data.dayBeforeNetRevenue || 0)}đ)\n` +
+                     `* *Ý nghĩa:* Tiền mặt sạch đã chuyển về ví Shopee ngày hôm qua, sẵn sàng rút về ngân hàng để chạy Ads hoặc nhập hàng ngay lập tức.\n\n` +
+                     `⏱️ **NET THỰC NHẬN DỰ KIẾN (Bán hàng hôm qua):** **${fmtVND(expectedNetRevenue)}**\n` +
+                     `* *Tăng trưởng hiệu suất:* **${expectedGrowthText}** (so với kỳ trước: ${fmtVNDShort(data.dayBeforeExpectedNet || 0)}đ)\n` +
+                     `* *Ý nghĩa:* Số tiền ước tính sẽ thu về sau này từ các đơn mới phát sinh hôm qua (Gross hôm qua trừ Phí sàn thô hôm qua). Hiện tại tiền chưa về ví vì đơn đang đi đường.`,
           },
         },
         { tag: 'hr' },
@@ -534,7 +551,7 @@ function buildMessageCard(data) {
                   tag: 'div',
                   text: {
                     tag: 'lark_md',
-                    content: `**Tăng trưởng:** ${growthText}`,
+                    content: `📈 **Tăng dòng tiền:** ${actualGrowthText}\n⏱️ **Tăng hiệu suất:** ${expectedGrowthText}`,
                   },
                 },
               ],
@@ -615,6 +632,19 @@ function buildMessageCard(data) {
               },
             ]
           : []),
+
+        // GIẢI THÍCH CHI TIẾT BẢN CHẤT DÒNG TIỀN CHO LEADER (Để tránh hiểu sai)
+        { tag: 'hr' },
+        {
+          tag: 'div',
+          text: {
+            tag: 'lark_md',
+            content: `💡 **GIẢI THÍCH CHI TIẾT BẢN CHẤT DÒNG TIỀN (Tránh hiểu sai):**\n` +
+                     `- **Net Dự Kiến (${fmtVNDShort(expectedNetRevenue)} VNĐ):** Trả lời câu hỏi *"Hôm qua bán được bao nhiêu đơn và sau này thu về khoảng bao nhiêu tiền?"*. Số tiền này **đang đi đường**, chưa chuyển vào ví vì khách hàng chưa nhận được hàng thành công.\n` +
+                     `- **Net Đã Về Ví (${fmtVNDShort(netRevenue)} VNĐ):** Trả lời câu hỏi *"Dòng tiền mặt thực tế về ví hôm qua là bao nhiêu để nhập hàng, chạy Ads?"*. Đây là dòng tiền sạch thực tế Shopee đã chuyển vào ví, tương ứng với **các đơn hàng cũ từ nhiều ngày trước (khoảng 15-20/05)** nay vừa hoàn thành đối soát.\n` +
+                     `- **Hiện tượng lệch đơn (LUMY WOOD):** Ví dụ shop LUMY WOOD ghi nhận 11 đơn giải ngân nhưng Sapo chỉ ghi nhận 9 đơn mới đặt ngày hôm qua. Sự lệch này do lệch ngày đặt hàng và ngày hoàn thành đối soát tự nhiên của sàn Shopee, hoàn toàn bình thường và an toàn.`,
+          },
+        },
 
         { tag: 'hr' },
 

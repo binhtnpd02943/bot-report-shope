@@ -20,22 +20,23 @@ async function analyzeRevenue({ todayData, yesterdayData }) {
 
   const fmtVND = (n) => new Intl.NumberFormat('vi-VN').format(n) + ' VNĐ';
 
-  const growthRevenue = yesterdayData
-    ? (((todayData.totalRevenue - yesterdayData.total_revenue) / yesterdayData.total_revenue) * 100).toFixed(1)
+  const growthRevenue = yesterdayData && yesterdayData.net_revenue
+    ? (((todayData.netRevenue - yesterdayData.net_revenue) / yesterdayData.net_revenue) * 100).toFixed(1)
     : null;
 
   const prompt = `
 Bạn là trợ lý phân tích kinh doanh Shopee. Hãy phân tích ngắn gọn (2-3 câu, tiếng Việt) dữ liệu sau:
 
 Ngày báo cáo: ${todayData.reportDate}
-Tổng doanh thu: ${fmtVND(todayData.totalRevenue)}
+Tổng doanh thu gốc (Gross): ${fmtVND(todayData.totalRevenue)}
+Doanh thu thực nhận (Net): ${fmtVND(todayData.netRevenue)} (sau khi đã khấu trừ ${fmtVND(todayData.fees?.total || 0)} chi phí sàn Shopee)
 Tổng số đơn: ${todayData.totalOrders} đơn
 Trung bình/đơn: ${fmtVND(todayData.avgPerOrder)}
-${growthRevenue != null ? `Tăng trưởng doanh thu: ${growthRevenue}% so với kỳ trước` : ''}
+${growthRevenue != null ? `Tăng trưởng doanh thu thực nhận (Net): ${growthRevenue}% so với kỳ trước` : ''}
 ${todayData.topProducts?.length ? `Top sản phẩm bán chạy: ${todayData.topProducts.slice(0, 3).map((p) => p.name).join(', ')}` : ''}
 
 Yêu cầu:
-- Nhận xét ngắn về hiệu suất kinh doanh hôm qua
+- Nhận xét ngắn về hiệu suất kinh doanh hôm qua dựa trên doanh thu thực nhận (Net)
 - Nêu điểm nổi bật hoặc cần chú ý
 - Đề xuất hành động nếu cần
 - Giọng văn chuyên nghiệp, súc tích

@@ -285,9 +285,13 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
   const connectionUrl = `${baseUrl}/analytics/orders/connection?ids=${connectionIds}&from=${timeFrom}&to=${timeTo}&statuses=0,1,2,3,4,5,6,7,8,9&zone=Asia/Saigon`;
   const connectionRes = await axios.get(connectionUrl, { headers: authHeaders });
 
-  // 2. Doanh số Ngày hôm qua & Ngày hôm kia
+  // 2. Doanh số Ngày hôm qua & Ngày hôm kia (Gross)
   const revenueUrl = `${baseUrl}/analytics/orders/revenue?ids=${connectionIds}&group=day&from=${dbTimeFrom}&to=${timeTo}&statuses=0,1,2,3,4,5,6,7,8,9&zone=Asia/Saigon`;
   const revenueRes = await axios.get(revenueUrl, { headers: authHeaders });
+
+  // 2b. Doanh thu thực nhận Ngày hôm qua & Ngày hôm kia (Net từ API /analytics/revenues)
+  const netRevenueUrl = `${baseUrl}/analytics/revenues?ids=${connectionIds}&group=day&from=${dbTimeFrom}&to=${timeTo}&zone=Asia/Saigon`;
+  const netRevenueRes = await axios.get(netRevenueUrl, { headers: authHeaders });
 
   // 3. Số lượng Live tasks (dùng khoảng thời gian 30 ngày để lấy thống kê chuẩn của Sapo)
   const thirtyDaysAgo = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60);
@@ -299,24 +303,31 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
   const productsUrl = `${baseUrl}/analytics/products?ids=${connectionIds}&from=${timeFrom}&to=${timeTo}&sortField=revenue&sortType=up&limit=5`;
   const productsRes = await axios.get(productsUrl, { headers: authHeaders });
 
-  // 5. CÀO CHI PHÍ VÀ PHÍ SÀN SHOPEE CHI TIẾT (Lấy theo từng connection ID đang hoạt động)
+  // 5. CÀO CHI PHÍ VÀ PHÍ SÀN SHOPEE CHI TIẾT THÔ (Để lấy phân bổ tỷ lệ giữa các shop)
   const activeConnIds = connectionIds.split(',').map(id => id.trim()).filter(Boolean);
-  logger.info(`📡 [SAPO GO SCRAPE] Đang cào chi phí chi tiết cho ${activeConnIds.length} gian hàng Shopee...`);
+  logger.info(`📡 [SAPO GO SCRAPE] Đang cào chi phí chi tiết cho ${activeConnIds.length} gian hàng Shopee từ ngày hôm kia...`);
   
+  const dayBeforeDateStr = `${dbDd}/${dbMm}/${dbYyyy}`;
+
   const feePromises = activeConnIds.map(async (connId) => {
-    const feeUrl = `${baseUrl}/analytics/fees/1?ids=${connId}&group=day&from=${timeFrom}&to=${timeTo}&zone=Asia/Saigon`;
+    const feeUrl = `${baseUrl}/analytics/fees/1?ids=${connId}&group=day&from=${dbTimeFrom}&to=${timeTo}&zone=Asia/Saigon`;
     try {
       const res = await axios.get(feeUrl, { headers: authHeaders, timeout: 5000 });
-      const feeObj = res.data?.fee || { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
+      const feesList = res.data?.fees || [];
+      const yesterdayFee = feesList.find(f => f.time === reportDate) || { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
+      const dayBeforeFee = feesList.find(f => f.time === dayBeforeDateStr) || { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
       return {
         connId,
-        fee: feeObj
+        yesterday: yesterdayFee,
+        dayBefore: dayBeforeFee
       };
     } catch (err) {
       logger.error(`❌ [SAPO GO SCRAPE] Lỗi lấy chi phí cho shop #${connId}: ${err.message}`);
+      const emptyFee = { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
       return {
         connId,
-        fee: { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 }
+        yesterday: emptyFee,
+        dayBefore: emptyFee
       };
     }
   });
@@ -324,20 +335,41 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
   const feeResults = await Promise.all(feePromises);
   const feeMap = {};
   feeResults.forEach(item => {
-    feeMap[item.connId] = item.fee;
+    feeMap[item.connId] = {
+      yesterday: item.yesterday,
+      dayBefore: item.dayBefore
+    };
   });
 
-  // Tính tổng chi phí sàn toàn cục
-  const totalSellerFee = feeResults.reduce((acc, item) => acc + Number(item.fee.total || 0), 0);
-  const totalTransactionFee = feeResults.reduce((acc, item) => acc + Number(item.fee.seller_transaction_fee || 0), 0);
-  const totalCommissionFee = feeResults.reduce((acc, item) => acc + Number(item.fee.commission_fee || 0), 0);
-  const totalServiceFee = feeResults.reduce((acc, item) => acc + Number(item.fee.service_fee || 0), 0);
-
-  // Trích xuất số liệu hôm qua
+  // Trích xuất số liệu doanh thu gốc & thực nhận hôm qua & hôm kia
   const revenuesList = revenueRes.data?.revenues || [];
   const yesterdayRevenueObj = revenuesList.find(r => r.time === reportDate) || { total: 0, quantity: 0, average: 0 };
-  const dayBeforeDateStr = `${dbDd}/${dbMm}/${dbYyyy}`;
   const dayBeforeRevenueObj = revenuesList.find(r => r.time === dayBeforeDateStr) || { total: 0, quantity: 0, average: 0 };
+
+  const netRevenuesList = netRevenueRes.data?.revenues || [];
+  const yesterdayNetObj = netRevenuesList.find(r => r.time === reportDate) || { total: 0 };
+  const dayBeforeNetObj = netRevenuesList.find(r => r.time === dayBeforeDateStr) || { total: 0 };
+
+  const yesterdayGrossRevenue = Number(yesterdayRevenueObj.total || 0);
+  const yesterdayNetRevenue = Number(yesterdayNetObj.total || 0);
+  const dayBeforeGrossRevenue = Number(dayBeforeRevenueObj.total || 0);
+  const dayBeforeNetRevenue = Number(dayBeforeNetObj.total || 0);
+
+  // Tính tổng chi phí sàn quyết toán thực tế cho cả 2 ngày (để phục vụ việc tính toán chênh lệch nếu cần, nhưng không scale vào báo cáo nữa)
+  const totalSellerFee = Math.max(0, yesterdayGrossRevenue - yesterdayNetRevenue);
+
+  // Tính tỷ lệ nhân (scale factor) từ chi phí thô Sapo trả về sang chi phí thực nhận đã đối soát
+  const rawTotalFee = feeResults.reduce((acc, item) => acc + Number(item.yesterday.total || 0), 0);
+  const scaleFactor = 1; // Khóa scale factor = 1 để lấy đúng số liệu thô khớp 100% Sapo Go Dashboard cho đơn phát sinh hôm qua
+  const expectedNetRevenue = yesterdayGrossRevenue - rawTotalFee;
+
+  const dayBeforeRawTotalFee = feeResults.reduce((acc, item) => acc + Number(item.dayBefore.total || 0), 0);
+  const dayBeforeExpectedNet = dayBeforeGrossRevenue - dayBeforeRawTotalFee;
+
+  // Phân bổ tỷ lệ chi phí đã đối soát
+  const totalTransactionFee = Math.round(feeResults.reduce((acc, item) => acc + Number(item.yesterday.seller_transaction_fee || 0), 0) * scaleFactor);
+  const totalCommissionFee = Math.round(feeResults.reduce((acc, item) => acc + Number(item.yesterday.commission_fee || 0), 0) * scaleFactor);
+  const totalServiceFee = Math.round(feeResults.reduce((acc, item) => acc + Number(item.yesterday.service_fee || 0), 0) * scaleFactor);
 
   // Format breakdown cửa hàng Shopee
   const shopeeShopBreakdown = {};
@@ -352,18 +384,20 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     if (excludedShops.includes(name.trim().toLowerCase())) {
       return; // Bỏ qua shop đã bị khai tử
     }
-    const shopFee = feeMap[id] || { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
+    const shopFees = feeMap[id] || { yesterday: { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 } };
+    const shopYesterdayFee = shopFees.yesterday;
+    const scaledShopFee = Math.round(Number(shopYesterdayFee.total || 0) * scaleFactor);
     shopeeShopBreakdown[name] = {
       revenue: 0,
       orders: 0,
       cancelledCount: 0,
       fees: {
-        total: Number(shopFee.total || 0),
-        transaction: Number(shopFee.seller_transaction_fee || 0),
-        commission: Number(shopFee.commission_fee || 0),
-        service: Number(shopFee.service_fee || 0)
+        total: scaledShopFee,
+        transaction: Math.round(Number(shopYesterdayFee.seller_transaction_fee || 0) * scaleFactor),
+        commission: Math.round(Number(shopYesterdayFee.commission_fee || 0) * scaleFactor),
+        service: Math.round(Number(shopYesterdayFee.service_fee || 0) * scaleFactor)
       },
-      netRevenue: 0 - Number(shopFee.total || 0)
+      netRevenue: 0 - scaledShopFee
     };
   });
 
@@ -372,18 +406,20 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     if (excludedShops.includes(name.trim().toLowerCase())) {
       return; // Bỏ qua shop đã bị khai tử
     }
-    const shopFee = feeMap[b.connection_id] || { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 };
+    const shopFees = feeMap[b.connection_id] || { yesterday: { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 } };
+    const shopYesterdayFee = shopFees.yesterday;
+    const scaledShopFee = Math.round(Number(shopYesterdayFee.total || 0) * scaleFactor);
     shopeeShopBreakdown[name] = {
       revenue: Number(b.current_total || 0),
       orders: Number(b.quantity || 0),
       cancelledCount: 0,
       fees: {
-        total: Number(shopFee.total || 0),
-        transaction: Number(shopFee.seller_transaction_fee || 0),
-        commission: Number(shopFee.commission_fee || 0),
-        service: Number(shopFee.service_fee || 0)
+        total: scaledShopFee,
+        transaction: Math.round(Number(shopYesterdayFee.seller_transaction_fee || 0) * scaleFactor),
+        commission: Math.round(Number(shopYesterdayFee.commission_fee || 0) * scaleFactor),
+        service: Math.round(Number(shopYesterdayFee.service_fee || 0) * scaleFactor)
       },
-      netRevenue: Number(b.current_total || 0) - Number(shopFee.total || 0)
+      netRevenue: Number(b.current_total || 0) - scaledShopFee
     };
   });
 
@@ -400,7 +436,7 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
 
   return {
     reportDate,
-    totalRevenue: Number(yesterdayRevenueObj.total || 0),
+    totalRevenue: yesterdayGrossRevenue,
     totalOrders: Number(yesterdayRevenueObj.quantity || 0),
     totalProducts: topProducts.reduce((acc, p) => acc + p.qty, 0),
     avgPerOrder: Math.round(yesterdayRevenueObj.average || 0),
@@ -413,16 +449,19 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     totalShippingFee: 0,
     // Báo cáo chi phí toàn cục
     fees: {
-      total: totalSellerFee,
+      total: rawTotalFee,
       transaction: totalTransactionFee,
       commission: totalCommissionFee,
       service: totalServiceFee
     },
-    netRevenue: Number(yesterdayRevenueObj.total || 0) - totalSellerFee,
-    feeRate: Number(yesterdayRevenueObj.total || 0) > 0 ? Math.round((totalSellerFee / Number(yesterdayRevenueObj.total || 0)) * 1000) / 10 : 0,
+    netRevenue: yesterdayNetRevenue,
+    expectedNetRevenue: expectedNetRevenue,
+    feeRate: yesterdayGrossRevenue > 0 ? Math.round((rawTotalFee / yesterdayGrossRevenue) * 1000) / 10 : 0,
     shopeeShopBreakdown,
     topProducts,
-    dayBeforeRevenue: Number(dayBeforeRevenueObj.total || 0),
+    dayBeforeRevenue: dayBeforeGrossRevenue,
+    dayBeforeNetRevenue: dayBeforeNetRevenue,
+    dayBeforeExpectedNet: dayBeforeExpectedNet,
     processedAt: new Date().toISOString()
   };
 }

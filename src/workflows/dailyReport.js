@@ -37,12 +37,19 @@ async function runDailyReport({ shopId } = {}) {
         password: process.env.SAPO_GO_PASSWORD
       });
 
-      // Tính % tăng trưởng dựa trên doanh thu hôm qua và hôm kia đã cào
-      const rawGrowth = calc.calcGrowthPercent(
-        marketplaceReport.totalRevenue,
-        marketplaceReport.dayBeforeRevenue
+      // Tính % tăng trưởng dòng tiền thực nhận về ví (Net thực tế) hôm qua và hôm kia
+      const rawActualGrowth = calc.calcGrowthPercent(
+        marketplaceReport.netRevenue,
+        marketplaceReport.dayBeforeNetRevenue
       );
-      const growthPercent = rawGrowth !== null ? Number(rawGrowth.toFixed(1)) : 0;
+      const actualNetGrowthPercent = rawActualGrowth !== null ? Number(rawActualGrowth.toFixed(1)) : 0;
+
+      // Tính % tăng trưởng hiệu suất bán hàng (Net dự kiến) hôm qua và hôm kia
+      const rawExpectedGrowth = calc.calcGrowthPercent(
+        marketplaceReport.expectedNetRevenue,
+        marketplaceReport.dayBeforeExpectedNet
+      );
+      const expectedNetGrowthPercent = rawExpectedGrowth !== null ? Number(rawExpectedGrowth.toFixed(1)) : 0;
 
       // Phân tích AI
       let aiAnalysis = null;
@@ -56,22 +63,29 @@ async function runDailyReport({ shopId } = {}) {
             cancelledCount: marketplaceReport.cancelledCount,
             pendingFulfillmentCount: marketplaceReport.pendingFulfillmentCount,
             pendingConfirmationCount: marketplaceReport.pendingConfirmationCount,
-            topProducts: marketplaceReport.topProducts
+            topProducts: marketplaceReport.topProducts,
+            netRevenue: marketplaceReport.netRevenue,
+            expectedNetRevenue: marketplaceReport.expectedNetRevenue,
+            fees: marketplaceReport.fees
           },
           yesterdayData: {
-            total_revenue: marketplaceReport.dayBeforeRevenue
+            total_revenue: marketplaceReport.dayBeforeRevenue,
+            net_revenue: marketplaceReport.dayBeforeNetRevenue,
+            expected_net_revenue: marketplaceReport.dayBeforeExpectedNet
           }
         });
       } catch (aiErr) {
-        logger.error(`⚠️ Lỗi phân tích AI (bỏ qua): ${aiErr.message}`);
+        logger.error(`⚠️ Lỗi phân tích AI (bỏ quan): ${aiErr.message}`);
       }
 
       // Tổng hợp dữ liệu gửi Lark
       const finalReport = {
         ...marketplaceReport,
         shopName: process.env.SHOP_NAME || 'LUXI DECOR (Shopee Sapo Go)',
-        growthPercent,
-        aiAnalysis: aiAnalysis || `💡 **Phân tích Hiệu suất Shopee Marketplace:**\n- **Doanh thu thực nhận (Net):** Đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.netRevenue)} VNĐ** (sau khi đã khấu trừ **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.fees.total)} VNĐ** chi phí sàn Shopee).\n- **Tổng đơn hàng:** **${marketplaceReport.totalOrders} đơn** thành công (TB đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.avgPerOrder)} VNĐ/đơn**).\n- **Tăng trưởng:** Kỳ trước doanh thu đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.dayBeforeRevenue)} VNĐ**.`
+        growthPercent: actualNetGrowthPercent,
+        actualNetGrowthPercent,
+        expectedNetGrowthPercent,
+        aiAnalysis: aiAnalysis || `💡 **Phân tích Hiệu suất Shopee Marketplace:**\n- **Dòng tiền thực nhận đã về ví:** Đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.netRevenue)} VNĐ** (Kỳ trước đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.dayBeforeNetRevenue)} VNĐ**).\n- **Doanh thu thực nhận dự kiến:** Đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.expectedNetRevenue)} VNĐ** (Kỳ trước dự kiến đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.dayBeforeExpectedNet || 0)} VNĐ**).\n- **Tổng đơn hàng:** **${marketplaceReport.totalOrders} đơn** thành công (TB đạt **${new Intl.NumberFormat('vi-VN').format(marketplaceReport.avgPerOrder)} VNĐ/đơn**).`
       };
 
       // Gửi báo cáo lên Lark
