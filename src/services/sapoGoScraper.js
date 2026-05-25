@@ -8,6 +8,12 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 const db = require('../database/db');
 
+function getProductReportLimit() {
+  const configuredLimit = Number(process.env.SAPO_PRODUCT_REPORT_LIMIT || 100);
+  if (!Number.isFinite(configuredLimit) || configuredLimit <= 0) return 100;
+  return Math.min(Math.round(configuredLimit), 200);
+}
+
 /**
  * Đăng nhập Sapo Go và lấy danh sách đơn hàng trong khoảng thời gian (Legacy POS)
  */
@@ -142,11 +148,11 @@ async function extractMarketplaceSession({ storeAlias, username, password }) {
               'x-market-account-id': headers['x-market-account-id'],
               'accept': 'application/json, text/plain, */*'
             };
-            
+
             try {
               const urlObj = new URL(url);
               connectionIds = urlObj.searchParams.get('ids') || '';
-            } catch (_) {}
+            } catch (_) { }
           }
         }
       }
@@ -188,7 +194,7 @@ async function extractMarketplaceSession({ storeAlias, username, password }) {
     const reportUrl = `https://${cleanAlias}.mysapogo.com/admin/apps/market-place/home/report`;
     logger.info(`📡 Điều hướng tới Dashboard Sàn TMĐT: ${reportUrl}`);
     await page.goto(reportUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-    
+
     // Đợi iframe Sàn TMĐT xuất hiện thay vì dừng cứng 8s
     logger.info('⏳ Đợi iframe Sàn TMĐT tải...');
     const iframeSelector = 'iframe[src*="market-place.sapoapps.vn"]';
@@ -252,14 +258,22 @@ async function extractMarketplaceSession({ storeAlias, username, password }) {
 /**
  * GỌI API SÀN TMĐT TRỰC TIẾP QUA AXIOS
  */
-async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopMapping }) {
-  // Tính toán thời gian (Ngày hôm qua & Hôm kia theo giờ VN)
-  const now = new Date();
-  const vnTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
-  
-  // Ngày hôm qua (Yesterday)
-  const yesterday = new Date(vnTime);
-  yesterday.setDate(yesterday.getDate() - 1);
+async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopMapping, targetDate }) {
+  let yesterday;
+  if (targetDate) {
+    const parts = targetDate.split('/');
+    if (parts.length === 3) {
+      yesterday = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00+07:00`);
+    } else {
+      yesterday = new Date(targetDate);
+    }
+  } else {
+    const now = new Date();
+    const vnTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    yesterday = new Date(vnTime);
+    yesterday.setDate(yesterday.getDate() - 1);
+  }
+
   const yYyyy = yesterday.getFullYear();
   const yMm = String(yesterday.getMonth() + 1).padStart(2, '0');
   const yDd = String(yesterday.getDate()).padStart(2, '0');
@@ -299,14 +313,14 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
   const todayUrl = `${baseUrl}/analytics/orders/today?ids=${connectionIds}&from=${thirtyDaysAgo}&to=${nowSec}&statuses=0,1,2,3,4,5,6,7,8,9&zone=Asia/Saigon`;
   const todayRes = await axios.get(todayUrl, { headers: authHeaders });
 
-  // 4. Top sản phẩm bán chạy ngày hôm qua
-  const productsUrl = `${baseUrl}/analytics/products?ids=${connectionIds}&from=${timeFrom}&to=${timeTo}&sortField=revenue&sortType=up&limit=5`;
+  // 4. Sản phẩm bán chạy ngày hôm qua
+  const productsUrl = `${baseUrl}/analytics/products?ids=${connectionIds}&from=${timeFrom}&to=${timeTo}&sortField=revenue&sortType=up`;
   const productsRes = await axios.get(productsUrl, { headers: authHeaders });
 
   // 5. CÀO CHI PHÍ VÀ PHÍ SÀN SHOPEE CHI TIẾT THÔ (Để lấy phân bổ tỷ lệ giữa các shop)
   const activeConnIds = connectionIds.split(',').map(id => id.trim()).filter(Boolean);
   logger.info(`📡 [SAPO GO SCRAPE] Đang cào chi phí chi tiết cho ${activeConnIds.length} gian hàng Shopee từ ngày hôm kia...`);
-  
+
   const dayBeforeDateStr = `${dbDd}/${dbMm}/${dbYyyy}`;
 
   const feePromises = activeConnIds.map(async (connId) => {
@@ -371,10 +385,38 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
   const totalCommissionFee = Math.round(feeResults.reduce((acc, item) => acc + Number(item.yesterday.commission_fee || 0), 0) * scaleFactor);
   const totalServiceFee = Math.round(feeResults.reduce((acc, item) => acc + Number(item.yesterday.service_fee || 0), 0) * scaleFactor);
 
+  // GỌI API ĐỂ LẤY CHI TIẾT DOANH THU THỰC NHẬN (NET VÀO VÍ) CHO TỪNG GIAN HÀNG
+  logger.info(`📡 [SAPO GO SCRAPE] Đang cào doanh thu thực nhận (Net Ví) chi tiết cho ${activeConnIds.length} gian hàng Shopee...`);
+
+  const netPromises = activeConnIds.map(async (connId) => {
+    const netUrl = `${baseUrl}/analytics/revenues?ids=${connId}&group=day&from=${timeFrom}&to=${timeTo}&zone=Asia/Saigon`;
+    try {
+      const res = await axios.get(netUrl, { headers: authHeaders, timeout: 5000 });
+      const revList = res.data?.revenues || [];
+      const yesterdayRev = revList.find(r => r.time === reportDate) || { total: 0 };
+      return {
+        connId,
+        netRevenue: Number(yesterdayRev.total || 0)
+      };
+    } catch (err) {
+      logger.error(`❌ [SAPO GO SCRAPE] Lỗi lấy Net Revenue cho shop #${connId}: ${err.message}`);
+      return {
+        connId,
+        netRevenue: 0
+      };
+    }
+  });
+
+  const netResults = await Promise.all(netPromises);
+  const netMap = {};
+  netResults.forEach(item => {
+    netMap[item.connId] = item.netRevenue;
+  });
+
   // Format breakdown cửa hàng Shopee
   const shopeeShopBreakdown = {};
   const breakdownList = connectionRes.data || [];
-  
+
   // Danh sách shop đã khai tử cần loại bỏ
   const excludedShopsStr = process.env.EXCLUDED_SHOPS || 'MAYcolor,MayFe.vn';
   const excludedShops = excludedShopsStr.split(',').map(s => s.trim().toLowerCase());
@@ -387,6 +429,7 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     const shopFees = feeMap[id] || { yesterday: { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 } };
     const shopYesterdayFee = shopFees.yesterday;
     const scaledShopFee = Math.round(Number(shopYesterdayFee.total || 0) * scaleFactor);
+    const shopNetActual = netMap[id] !== undefined ? netMap[id] : (0 - scaledShopFee);
     shopeeShopBreakdown[name] = {
       revenue: 0,
       orders: 0,
@@ -397,7 +440,8 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
         commission: Math.round(Number(shopYesterdayFee.commission_fee || 0) * scaleFactor),
         service: Math.round(Number(shopYesterdayFee.service_fee || 0) * scaleFactor)
       },
-      netRevenue: 0 - scaledShopFee
+      netRevenue: 0 - scaledShopFee,
+      netRevenueActual: shopNetActual
     };
   });
 
@@ -409,6 +453,7 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     const shopFees = feeMap[b.connection_id] || { yesterday: { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 } };
     const shopYesterdayFee = shopFees.yesterday;
     const scaledShopFee = Math.round(Number(shopYesterdayFee.total || 0) * scaleFactor);
+    const shopNetActual = netMap[b.connection_id] !== undefined ? netMap[b.connection_id] : (Number(b.current_total || 0) - scaledShopFee);
     shopeeShopBreakdown[name] = {
       revenue: Number(b.current_total || 0),
       orders: Number(b.quantity || 0),
@@ -419,17 +464,41 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
         commission: Math.round(Number(shopYesterdayFee.commission_fee || 0) * scaleFactor),
         service: Math.round(Number(shopYesterdayFee.service_fee || 0) * scaleFactor)
       },
-      netRevenue: Number(b.current_total || 0) - scaledShopFee
+      netRevenue: Number(b.current_total || 0) - scaledShopFee,
+      netRevenueActual: shopNetActual
     };
   });
 
   // Format top sản phẩm
   const rawProducts = productsRes.data?.products || [];
-  const topProducts = rawProducts.map(p => ({
-    name: p.variation_name || 'Sản phẩm không tên',
-    qty: Number(p.quantity || 0),
-    revenue: Number(p.revenue || 0)
-  }));
+  logger.info(`📦 [SAPO GO SCRAPE] Đã lấy ${rawProducts.length} sản phẩm từ Sapo Marketplace.`);
+  const topProducts = rawProducts.map(p => {
+    const shopName = shopMapping[p.connection_id] || `Shopee Shop #${p.connection_id}`;
+
+    // Parse name and variant
+    const nameParts = (p.variation_name || '').split(' - ').map(s => s.trim());
+    const cleanProdName = nameParts[0] || 'Sản phẩm không tên';
+    let variantName = '';
+    if (nameParts.length >= 3) {
+      variantName = nameParts[nameParts.length - 1];
+    } else if (nameParts.length === 2) {
+      variantName = nameParts[1];
+    }
+
+    return {
+      name: cleanProdName,
+      fullName: p.variation_name || '',
+      variantName: variantName,
+      sku: p.sku || p.sapo_sku || '',
+      shopName: shopName,
+      qty: Number(p.quantity || 0),
+      revenue: Number(p.revenue || 0),
+      orderNumber: Number(p.order_number || 0),
+      cancelledQty: Number(p.cancelled_quantity || 0),
+      cancelledOrderNumber: Number(p.cancelled_order_number || 0),
+      cancelledRate: Number(p.cancelled_rate || 0)
+    };
+  });
 
   // Live Tasks từ Sapo Go Marketplace
   const liveTasks = todayRes.data || { pending: 0, packed: 0, shipping: 0, in_cancelled: 0 };
@@ -469,13 +538,13 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
 /**
  * CÀO BÁO CÁO SHOPEE THỰC TẾ TỪ ỨNG DỤNG SÀN TMĐT SAPO GO (BẢN TỐI ƯU CÓ CACHING)
  */
-async function getMarketplaceReport({ storeAlias, username, password }) {
+async function getMarketplaceReport({ storeAlias, username, password, targetDate }) {
   const cleanAlias = String(storeAlias)
     .replace('.mysapogo.com', '')
     .replace('.mysapo.net', '')
     .trim();
 
-  logger.info(`🔍 [SAPO GO SCRAPE] Bắt đầu lấy báo cáo cho store: ${cleanAlias}`);
+  logger.info(`🔍 [SAPO GO SCRAPE] Bắt đầu lấy báo cáo cho store: ${cleanAlias} (targetDate: ${targetDate || 'yesterday'})`);
 
   // 1. Thử lấy session từ DB
   let session = db.getSapoGoSession(cleanAlias);
@@ -485,14 +554,22 @@ async function getMarketplaceReport({ storeAlias, username, password }) {
       const report = await fetchMarketplaceReportFromApi({
         authHeaders: session.authHeaders,
         connectionIds: session.connectionIds,
-        shopMapping: session.shopMapping
+        shopMapping: session.shopMapping,
+        targetDate
       });
+
+      // Kiểm tra nếu báo cáo rỗng hoàn toàn (0 đơn và 0 doanh thu)
+      if (report.totalRevenue === 0 && report.totalOrders === 0) {
+        logger.warn(`⚠️ [SAPO GO SCRAPE] Báo cáo trả về 0 đơn và 0 doanh thu. Nghi ngờ session cached bị hết hạn ngầm. Thử cào lại session mới bằng Puppeteer...`);
+        throw new Error('SESSION_EXPIRED_SILENTLY');
+      }
+
       logger.info(`⚡ [SAPO GO SCRAPE] Lấy báo cáo thành công qua API cached (không dùng Puppeteer).`);
       return report;
     } catch (err) {
-      const isAuthError = err.response && (err.response.status === 401 || err.response.status === 403);
+      const isAuthError = err.message === 'SESSION_EXPIRED_SILENTLY' || (err.response && (err.response.status === 401 || err.response.status === 403));
       if (isAuthError) {
-        logger.warn(`⚠️ [SAPO GO SCRAPE] Session cached hết hạn (Mã lỗi ${err.response.status}). Tiến hành khởi chạy Puppeteer để lấy session mới...`);
+        logger.warn(`⚠️ [SAPO GO SCRAPE] Session cached hết hạn hoặc lỗi ngầm. Tiến hành khởi chạy Puppeteer để lấy session mới...`);
       } else {
         logger.error(`❌ [SAPO GO SCRAPE] Gọi API lỗi hệ thống (Mã lỗi ${err.response?.status || 'unknown'}): ${err.message}`);
         throw err;
@@ -505,7 +582,7 @@ async function getMarketplaceReport({ storeAlias, username, password }) {
   // 2. Khởi chạy Puppeteer lấy session mới
   try {
     const newSession = await extractMarketplaceSession({ storeAlias, username, password });
-    
+
     // Lưu vào SQLite
     db.saveSapoGoSession(cleanAlias, newSession);
 
@@ -514,7 +591,8 @@ async function getMarketplaceReport({ storeAlias, username, password }) {
     const report = await fetchMarketplaceReportFromApi({
       authHeaders: newSession.authHeaders,
       connectionIds: newSession.connectionIds,
-      shopMapping: newSession.shopMapping
+      shopMapping: newSession.shopMapping,
+      targetDate
     });
     return report;
   } catch (err) {

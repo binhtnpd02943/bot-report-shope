@@ -91,6 +91,13 @@ async function runDailyReport({ shopId } = {}) {
       // Gửi báo cáo lên Lark
       await lark.sendReportCard(finalReport);
 
+      // Đồng bộ dữ liệu sang Lark Base (Bitable)
+      try {
+        await lark.syncFinancialReportToLarkBase(finalReport);
+      } catch (baseErr) {
+        logger.error(`⚠️ Lỗi đồng bộ Lark Base (không chặn quy trình): ${baseErr.message}`);
+      }
+
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       logger.info('═'.repeat(55));
       logger.info(`✅ BÁO CÁO SHOPEE MARKETPLACE HOÀN TẤT trong ${elapsed}s`);
