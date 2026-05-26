@@ -19,7 +19,8 @@ export default function SyncPanel({
     setErrorMsg("");
     setSuccessMsg("");
     try {
-      const response = await fetch("http://localhost:3000/api/report/trigger", {
+      const apiHost = typeof window !== "undefined" ? `http://${window.location.hostname}:3000` : "http://localhost:3000";
+      const response = await fetch(`${apiHost}/api/report/trigger`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"

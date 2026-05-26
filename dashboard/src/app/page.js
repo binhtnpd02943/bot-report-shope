@@ -26,7 +26,8 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("http://localhost:3000/api/analytics/dashboard");
+      const apiHost = typeof window !== "undefined" ? `http://${window.location.hostname}:3000` : "http://localhost:3000";
+      const res = await fetch(`${apiHost}/api/analytics/dashboard`);
       const result = await res.json();
       
       if (result.success && result.data && result.data.length > 0) {
