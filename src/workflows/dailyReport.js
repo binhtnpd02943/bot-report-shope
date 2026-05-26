@@ -98,6 +98,13 @@ async function runDailyReport({ shopId } = {}) {
         logger.error(`⚠️ Lỗi đồng bộ Lark Base (không chặn quy trình): ${baseErr.message}`);
       }
 
+      // Lưu lịch sử báo cáo chi tiết vào SQLite
+      try {
+        db.saveReport(finalReport.reportDate, finalReport);
+      } catch (dbErr) {
+        logger.error(`⚠️ Lỗi lưu lịch sử báo cáo vào SQLite (không chặn quy trình): ${dbErr.message}`);
+      }
+
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       logger.info('═'.repeat(55));
       logger.info(`✅ BÁO CÁO SHOPEE MARKETPLACE HOÀN TẤT trong ${elapsed}s`);
@@ -178,6 +185,13 @@ async function runDailyReport({ shopId } = {}) {
 
       // Gửi báo cáo lên Lark
       await lark.sendReportCard(finalReport);
+
+      // Lưu lịch sử báo cáo chi tiết vào SQLite
+      try {
+        db.saveReport(finalReport.reportDate, finalReport);
+      } catch (dbErr) {
+        logger.error(`⚠️ Lỗi lưu lịch sử báo cáo vào SQLite (không chặn quy trình): ${dbErr.message}`);
+      }
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       logger.info('═'.repeat(55));

@@ -48,6 +48,18 @@ for ((i=1; i<=RETRIES; i++)); do
     if echo "${RESPONSE}" | grep -qE '"status"\s*:\s*"ok"'; then
       log "Ung dung hoat dong HOAN HAO!"
       log "Response nhan duoc: ${RESPONSE}"
+      
+      # Kiểm tra thêm sức khỏe của Next.js Dashboard nếu có
+      DASHBOARD_HEALTH_URL="http://localhost:3001"
+      log "Dang kiem tra them suc khoe Next.js Dashboard tai: ${DASHBOARD_HEALTH_URL}"
+      DASH_RESPONSE=$(curl -sI -o /dev/null -w "%{http_code}" --max-time 5 "${DASHBOARD_HEALTH_URL}" || true)
+      if [ "${DASH_RESPONSE}" = "200" ] || [ "${DASH_RESPONSE}" = "302" ]; then
+        log "Next.js Dashboard hoat dong HOAN HAO (HTTP ${DASH_RESPONSE})!"
+      else
+        log_error "Canh bao: Next.js Dashboard co the chua phan hoi dung (HTTP ${DASH_RESPONSE}). Vui long kiem tra PM2 logs."
+        log_error "Luu y: Loi nay khong lam huy (rollback) qua trinh deploy de bao ve bot chinh."
+      fi
+      
       exit 0
     else
       log_error "Nhan response tu server nhung status khong phai 'ok'."

@@ -77,6 +77,7 @@ function initDatabase() {
   `);
 
   ensureColumn('orders', 'image_urls', 'TEXT');
+  ensureColumn('report_history', 'raw_json', 'TEXT');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS order_items (
@@ -187,9 +188,16 @@ function saveReport(reportDate, data) {
   if (!db) initDatabase();
 
   db.prepare(`
-    INSERT INTO report_history (report_date, total_revenue, total_orders, avg_per_order, ai_analysis, status)
-    VALUES (?, ?, ?, ?, ?, 'success')
-  `).run(reportDate, data.totalRevenue, data.totalOrders, data.avgPerOrder, data.aiAnalysis || '');
+    INSERT INTO report_history (report_date, total_revenue, total_orders, avg_per_order, ai_analysis, raw_json, status)
+    VALUES (?, ?, ?, ?, ?, ?, 'success')
+  `).run(
+    reportDate,
+    data.totalRevenue,
+    data.totalOrders,
+    data.avgPerOrder,
+    data.aiAnalysis || '',
+    data.raw_json || (typeof data === 'object' ? JSON.stringify(data) : null)
+  );
 }
 
 /**

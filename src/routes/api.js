@@ -314,12 +314,222 @@ router.get('/reports', (req, res) => {
     const Database = require('better-sqlite3');
     const path = require('path');
     const _db = new Database(path.join(__dirname, '../../data/store.db'));
-    const rows = _db.prepare('SELECT * FROM report_history ORDER BY sent_at DESC LIMIT 30').all();
-    res.json({ success: true, count: rows.length, data: rows });
+    const rows = _db.prepare('SELECT * FROM report_history ORDER BY report_date DESC, sent_at DESC LIMIT 30').all();
+    
+    const formattedRows = rows.map(row => {
+      let details = null;
+      if (row.raw_json) {
+        try {
+          details = JSON.parse(row.raw_json);
+        } catch (e) {
+          logger.error(`[API] Lỗi parse raw_json của ngày ${row.report_date}: ${e.message}`);
+        }
+      }
+      return {
+        ...row,
+        details
+      };
+    });
+    
+    res.json({ success: true, count: rows.length, data: formattedRows });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+/**
+ * GET /api/analytics/dashboard
+ * Trả về toàn bộ lịch sử báo cáo tài chính Shopee cho giao diện Dashboard.
+ * Nếu SQLite chưa có dữ liệu báo cáo nào, tự động sinh dữ liệu mẫu 7 ngày gần nhất để làm seeder trực quan.
+ */
+router.get('/analytics/dashboard', (req, res) => {
+  try {
+    const Database = require('better-sqlite3');
+    const path = require('path');
+    const _db = new Database(path.join(__dirname, '../../data/store.db'));
+    const rows = _db.prepare('SELECT * FROM report_history WHERE status = \'success\' ORDER BY report_date ASC').all();
+
+    // 1. Nếu có dữ liệu trong SQLite, trả về dữ liệu thực tế
+    if (rows.length > 0) {
+      const reports = rows.map(row => {
+        if (row.raw_json) {
+          try {
+            return JSON.parse(row.raw_json);
+          } catch (e) {
+            logger.error(`[API] Lỗi parse raw_json của ngày ${row.report_date}: ${e.message}`);
+          }
+        }
+        
+        // Cấu trúc fallback cho dữ liệu cũ (Legacy)
+        return {
+          reportDate: row.report_date,
+          totalRevenue: row.total_revenue || 0,
+          totalOrders: row.total_orders || 0,
+          avgPerOrder: row.avg_per_order || 0,
+          aiAnalysis: row.ai_analysis || '',
+          fees: { total: 0, transaction: 0, commission: 0, service: 0 },
+          netRevenue: row.total_revenue || 0,
+          expectedNetRevenue: row.total_revenue || 0,
+          shopeeShopBreakdown: {},
+          topProducts: []
+        };
+      });
+
+      logger.info(`[API] Trả về ${reports.length} báo cáo thực tế từ SQLite.`);
+      return res.json({ success: true, isMock: false, data: reports });
+    }
+
+    // 2. Nếu SQLite rỗng (Fresh setup), tự động sinh dữ liệu mẫu 7 ngày gần nhất cực kỳ trực quan
+    logger.info(`[API] SQLite chưa có báo cáo. Đang sinh dữ liệu mẫu seeder 7 ngày gần nhất cho Dashboard...`);
+    const mockData = generateMockDashboardData();
+    res.json({ success: true, isMock: true, data: mockData });
+
+  } catch (err) {
+    logger.error(`[API] Lỗi lấy dữ liệu dashboard: ${err.message}`);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Hàm hỗ trợ sinh dữ liệu mẫu seeder 7 ngày cực đẹp cho Dashboard
+function generateMockDashboardData() {
+  const data = [];
+  const now = new Date();
+  
+  const mockProducts = [
+    { name: "Kệ Gỗ Đựng Đồ Đa Năng LUXI", sku: "KE-GO-01", basePrice: 140000 },
+    { name: "Khay Mây Tròn Tự Nhiên Decor", sku: "KHAY-MAY-02", basePrice: 100000 },
+    { name: "Đèn Gốm Bát Tràng Cao Cấp", sku: "DEN-GOM-03", basePrice: 175000 },
+    { name: "Giỏ Cói Đựng Đồ LUXI Home", sku: "GIO-COI-04", basePrice: 80000 },
+    { name: "Lọ Hoa Thuỷ Tinh Bắc Âu", sku: "LO-HOA-05", basePrice: 60000 }
+  ];
+  
+  const shopNames = ["Shop A - LUXI HN", "Shop B - LUXI HCM", "Shop C - LUXI DN", "Shop D - LUXI HP", "Shop E - LUXI Cần Thơ", "Shop F - LUXI Biên Hoà"];
+  const shopShares = [0.28, 0.22, 0.18, 0.15, 0.10, 0.07];
+
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i - 1); // Từ 7 ngày trước đến hôm qua
+    
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const dateStr = `${dd}/${mm}/${yyyy}`;
+    
+    // Thăng giáng doanh số ngẫu nhiên theo ngày
+    const baseOrders = 70 + Math.floor(Math.random() * 40); // 70-110 đơn
+    const baseRevenue = baseOrders * (150000 + Math.floor(Math.random() * 30000)); // ~10.5M - 19.8M
+    
+    // Tính toán chi tiết chi phí sàn
+    const transactionFee = Math.round(baseRevenue * 0.03); // 3% phí thanh toán
+    const serviceFee = Math.round(baseRevenue * 0.08); // 8% phí dịch vụ
+    const commissionFee = Math.round(baseRevenue * 0.025); // 2.5% phí hoa hồng/vận chuyển
+    const totalFees = transactionFee + serviceFee + commissionFee;
+    const feeRate = Math.round((totalFees / baseRevenue) * 1000) / 10;
+    
+    const expectedNetRevenue = baseRevenue - totalFees;
+    const netRevenue = Math.round(expectedNetRevenue * (0.95 + Math.random() * 0.04)); // Ví thực nhận trễ/điều chỉnh ~95-99% dự kiến
+    
+    // Chi tiết 6 cửa hàng
+    const shopeeShopBreakdown = {};
+    shopNames.forEach((name, idx) => {
+      const share = shopShares[idx];
+      const shopRevenue = Math.round(baseRevenue * share * (0.95 + Math.random() * 0.1));
+      const shopOrders = Math.round(baseOrders * share * (0.9 + Math.random() * 0.2));
+      const shopFeesTotal = Math.round(totalFees * share * (0.95 + Math.random() * 0.1));
+      const shopFees = {
+        total: shopFeesTotal,
+        transaction: Math.round(transactionFee * share),
+        commission: Math.round(commissionFee * share),
+        service: Math.round(serviceFee * share)
+      };
+      shopeeShopBreakdown[name] = {
+        revenue: shopRevenue,
+        orders: shopOrders,
+        cancelledCount: Math.floor(Math.random() * 3),
+        fees: shopFees,
+        netRevenue: shopRevenue - shopFeesTotal,
+        netRevenueActual: Math.round((shopRevenue - shopFeesTotal) * (0.95 + Math.random() * 0.04))
+      };
+    });
+    
+    // Chi tiết sản phẩm bán chạy
+    const topProducts = mockProducts.map((p, idx) => {
+      const share = 0.35 - (idx * 0.06); // Phân bổ tỉ lệ bán chạy giảm dần
+      const qty = Math.round(baseOrders * share * (0.8 + Math.random() * 0.4));
+      const revenue = qty * p.basePrice;
+      const orderNumber = Math.round(qty * (0.85 + Math.random() * 0.1));
+      const cancelledQty = Math.floor(Math.random() * 3);
+      const cancelledOrderNumber = Math.max(0, cancelledQty - 1);
+      const cancelledRate = Math.round((cancelledQty / (qty || 1)) * 1000) / 10;
+      
+      return {
+        name: p.name,
+        fullName: `${p.name} - Phiên Bản Giới Hạn Decor`,
+        variantName: idx % 2 === 0 ? "Màu Gỗ Sồi" : "Màu Trắng Kem",
+        sku: p.sku,
+        shopName: shopNames[idx % 3],
+        qty,
+        revenue,
+        orderNumber,
+        cancelledQty,
+        cancelledOrderNumber,
+        cancelledRate
+      };
+    }).sort((a, b) => b.qty - a.qty);
+    
+    const liveTasks = {
+      pending: 10 + Math.floor(Math.random() * 15),
+      packed: 8 + Math.floor(Math.random() * 12),
+      shipping: 25 + Math.floor(Math.random() * 20),
+      in_cancelled: 3 + Math.floor(Math.random() * 5)
+    };
+    
+    data.push({
+      reportDate: dateStr,
+      totalRevenue: baseRevenue,
+      totalOrders: baseOrders,
+      totalProducts: topProducts.reduce((acc, p) => acc + p.qty, 0),
+      avgPerOrder: Math.round(baseRevenue / baseOrders),
+      cancelledCount: liveTasks.in_cancelled,
+      cancelledRate: 0,
+      pendingFulfillmentCount: liveTasks.pending,
+      pendingConfirmationCount: liveTasks.packed,
+      shippingCount: liveTasks.shipping,
+      totalDiscount: Math.round(baseRevenue * 0.05),
+      totalShippingFee: Math.round(baseRevenue * 0.04),
+      fees: {
+        total: totalFees,
+        transaction: transactionFee,
+        commission: commissionFee,
+        service: serviceFee
+      },
+      netRevenue,
+      expectedNetRevenue,
+      feeRate,
+      shopeeShopBreakdown,
+      topProducts,
+      dayBeforeRevenue: 0,
+      dayBeforeNetRevenue: 0,
+      dayBeforeExpectedNet: 0,
+      processedAt: new Date(d.getTime() + 8*60*60*1000).toISOString()
+    });
+  }
+  
+  // Điền tăng trưởng so với ngày hôm trước
+  for (let i = 0; i < data.length; i++) {
+    if (i > 0) {
+      data[i].dayBeforeRevenue = data[i-1].totalRevenue;
+      data[i].dayBeforeNetRevenue = data[i-1].netRevenue;
+      data[i].dayBeforeExpectedNet = data[i-1].expectedNetRevenue;
+    } else {
+      data[i].dayBeforeRevenue = Math.round(data[i].totalRevenue * 0.95);
+      data[i].dayBeforeNetRevenue = Math.round(data[i].netRevenue * 0.95);
+      data[i].dayBeforeExpectedNet = Math.round(data[i].expectedNetRevenue * 0.95);
+    }
+  }
+  
+  return data;
+}
 
 /**
  * GET /api/orders

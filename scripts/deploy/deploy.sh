@@ -90,6 +90,20 @@ cd "${NEW_RELEASE_PATH}"
 log "Dang cai dat cac dependencies cho production..."
 npm install --omit=dev --no-audit --no-fund
 
+# Xây dựng Next.js Dashboard (nếu có thư mục dashboard)
+if [ -d "${NEW_RELEASE_PATH}/dashboard" ]; then
+  log "Phat hien folder Dashboard Next.js. Dang cai dat dependencies cho Dashboard..."
+  cd "${NEW_RELEASE_PATH}/dashboard"
+  # Next.js build cần devDependencies để build nên ta cài đặt đầy đủ
+  npm install --no-audit --no-fund
+  
+  log "Dang xay dung phien ban production Next.js..."
+  npm run build
+  
+  # Quay lại release path
+  cd "${NEW_RELEASE_PATH}"
+fi
+
 log "Xoa folder data (neu co) trong release de tranh ghi de du lieu cua he thong..."
 rm -rf "${NEW_RELEASE_PATH}/data"
 
@@ -133,6 +147,22 @@ fi
 
 # Lưu trạng thái PM2 để tự khởi động lại khi reboot VPS
 pm2 save
+
+# Khởi chạy / Reload Next.js Dashboard (nếu có)
+if [ -d "${CURRENT_LINK}/dashboard" ]; then
+  DASHBOARD_PM2_NAME="shopee-lark-dashboard"
+  log "Phat hien dashboard. Dang reload/start Next.js Dashboard tren PM2..."
+  if pm2 describe "${DASHBOARD_PM2_NAME}" &>/dev/null; then
+    pm2 reload "${DASHBOARD_PM2_NAME}"
+  else
+    # Khởi chạy Next.js trên cổng 3001
+    pm2 start npm --name "${DASHBOARD_PM2_NAME}" \
+                  --cwd "${CURRENT_LINK}/dashboard" \
+                  -- \
+                  run start -- -p 3001
+  fi
+  pm2 save
+fi
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PHASE 6: Health Check (Kiểm tra sức khỏe dịch vụ)

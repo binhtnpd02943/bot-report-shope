@@ -60,6 +60,14 @@ else
   pm2 start "${CURRENT_LINK}/src/index.js" --name "${PM2_SERVICE_NAME}"
 fi
 
+# Reload Next.js Dashboard (nếu có)
+DASHBOARD_PM2_NAME="shopee-lark-dashboard"
+if pm2 describe "${DASHBOARD_PM2_NAME}" &>/dev/null; then
+  log "Dang reload PM2 service '${DASHBOARD_PM2_NAME}' voi code phien ban cu..."
+  pm2 reload "${DASHBOARD_PM2_NAME}"
+  log_info "PM2 service '${DASHBOARD_PM2_NAME}' da duoc reload thanh cong."
+fi
+
 # 5. Chạy healthcheck lại để đảm bảo việc rollback thành công
 log "Dang chay kiem tra suc khoe cho phien ban rollback..."
 if "${CURRENT_LINK}/scripts/deploy/healthcheck.sh"; then
