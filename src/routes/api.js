@@ -5,13 +5,13 @@
  *  - Kiểm tra trạng thái hệ thống
  *  - Quản lý credentials
  */
+// Sapo Webhook is active for stateless syncing
 const express = require('express');
 const router  = express.Router();
 const logger  = require('../utils/logger');
 const db      = require('../database/db');
 const shopee  = require('../services/shopee');
 const lark    = require('../services/lark');
-const nhanh   = require('../services/nhanh');
 const sapo    = require('../services/sapo');
 const calc    = require('../services/calculator');
 
@@ -26,7 +26,7 @@ const calc    = require('../services/calculator');
 router.get('/health', (req, res) => {
   res.json({
     status:    'ok',
-    mode:      process.env.INTEGRATION_MODE || 'nhanh_webhook',
+    mode:      process.env.INTEGRATION_MODE || 'sapo_go_scrape',
     uptime:    Math.floor(process.uptime()) + 's',
     timestamp: new Date().toISOString(),
     timezone:  process.env.TZ || 'Asia/Ho_Chi_Minh',
@@ -35,40 +35,9 @@ router.get('/health', (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-// NHANH.VN WEBHOOK
+// WEBHOOKS
 // ─────────────────────────────────────────────
 
-/**
- * POST /api/webhooks/nhanh/order
- * Nhan webhook them/cap nhat don hang tu Nhanh.vn.
- */
-router.post('/webhooks/nhanh/order', async (req, res) => {
-  if (!nhanh.verifyWebhook(req)) {
-    logger.warn('[NHANH] Webhook bi tu choi vi sai verify token.');
-    return res.status(401).json({ success: false, error: 'Invalid webhook token' });
-  }
-
-  try {
-    const order = nhanh.normalizeOrderWebhook(req.body);
-    db.upsertOrder(order);
-
-    if (shouldSyncOrderDetails()) {
-      try {
-        await lark.upsertOrderToBase(order);
-      } catch (err) {
-        logger.error(`[NHANH] Sync Lark Base loi cho don ${order.externalOrderId}: ${err.message}`);
-      }
-    }
-
-    logger.info(`[NHANH] Da nhan don ${order.externalOrderId} - ${order.status || 'unknown'} - ${order.revenue || 0}`);
-    res.json({ success: true, orderId: order.externalOrderId });
-  } catch (err) {
-    logger.error('[NHANH] Xu ly webhook that bai: ' + err.message);
-    res.status(400).json({ success: false, error: err.message });
-  }
-});
-
-/**
  * POST /api/webhooks/sapo/order
  * Nhan webhook don hang tu Sapo: orders/create, orders/updated, orders/paid...
  */

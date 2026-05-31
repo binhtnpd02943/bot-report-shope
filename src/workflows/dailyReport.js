@@ -186,6 +186,13 @@ async function runDailyReport({ shopId } = {}) {
       // Gửi báo cáo lên Lark
       await lark.sendReportCard(finalReport);
 
+      // Đồng bộ dữ liệu sang Lark Base (Bitable)
+      try {
+        await lark.syncFinancialReportToLarkBase(finalReport);
+      } catch (baseErr) {
+        logger.error(`⚠️ Lỗi đồng bộ Lark Base (không chặn quy trình): ${baseErr.message}`);
+      }
+
       // Lưu lịch sử báo cáo chi tiết vào SQLite
       try {
         db.saveReport(finalReport.reportDate, finalReport);
@@ -256,6 +263,13 @@ async function runDailyReport({ shopId } = {}) {
 
     // Gửi báo cáo lên Lark
     await lark.sendReportCard(finalReport);
+
+    // Đồng bộ dữ liệu sang Lark Base (Bitable)
+    try {
+      await lark.syncFinancialReportToLarkBase(finalReport);
+    } catch (baseErr) {
+      logger.error(`⚠️ Lỗi đồng bộ Lark Base (không chặn quy trình): ${baseErr.message}`);
+    }
 
     // Lưu vào DB
     db.saveReport(reportDate, {

@@ -1,0 +1,284 @@
+/* App.css - Clean Enterprise Light Theme inspired by Sapo Dashboard UI */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #f4f6f8;
+  color: #212b36;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow-x: hidden;
+}
+
+.dashboard-container {
+  padding: 20px;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+/* Tab Bar Sapo Style */
+.sapo-tabs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #dfe3e8;
+  padding: 0 24px;
+  margin: -20px -20px 20px -20px;
+}
+
+.sapo-tabs {
+  display: flex;
+  gap: 32px;
+}
+
+.sapo-tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  color: #637381;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 16px 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.sapo-tab-btn:hover {
+  color: #212b36;
+}
+
+.sapo-tab-btn.active {
+  color: #0088ff;
+  border-bottom-color: #0088ff;
+}
+
+.sapo-date-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sapo-select {
+  background: #ffffff;
+  border: 1px solid #c4cdd5;
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #212b36;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+}
+
+.sapo-select:focus {
+  border-color: #0088ff;
+}
+
+/* Sapo Panel Card */
+.sapo-card {
+  background: #ffffff;
+  border-radius: 8px;
+  border: 1px solid #dfe3e8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.sapo-card-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #212b36;
+  letter-spacing: 0.5px;
+  margin: 0 0 16px 0;
+  border-left: 3px solid #0088ff;
+  padding-left: 10px;
+}
+
+/* KPI Metrics Grid */
+.sapo-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.sapo-kpi-card {
+  background: #ffffff;
+  border: 1px solid #dfe3e8;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.sapo-kpi-icon-wrapper {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sapo-kpi-icon-wrapper.blue { background: rgba(0, 136, 255, 0.1); color: #0088ff; }
+.sapo-kpi-icon-wrapper.green { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+.sapo-kpi-icon-wrapper.orange { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
+.sapo-kpi-icon-wrapper.red { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+
+.sapo-kpi-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.sapo-kpi-label {
+  font-size: 11px;
+  color: #637381;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.sapo-kpi-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: #212b36;
+}
+
+/* Fulfillment Pipeline Sapo Style */
+.sapo-pipeline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+}
+
+.sapo-pipeline-item {
+  background: #f9fafb;
+  border: 1px solid #dfe3e8;
+  border-radius: 6px;
+  padding: 14px;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+
+.sapo-pipeline-item:hover {
+  border-color: #0088ff;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 136, 255, 0.08);
+}
+
+.sapo-pipeline-num {
+  font-size: 18px;
+  font-weight: 700;
+  color: #212b36;
+  margin-bottom: 4px;
+}
+
+.sapo-pipeline-label {
+  font-size: 11px;
+  color: #637381;
+  font-weight: 500;
+}
+
+/* Split Columns Layout */
+.sapo-split-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+@media (min-width: 1024px) {
+  .sapo-split-layout {
+    grid-template-columns: 2fr 1fr;
+  }
+}
+
+.sapo-split-layout-equal {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+@media (min-width: 1024px) {
+  .sapo-split-layout-equal {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Sapo Styled Table */
+.sapo-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+
+.sapo-table th {
+  background: #f4f6f8;
+  color: #637381;
+  font-weight: 600;
+  padding: 10px 14px;
+  border-bottom: 1px solid #dfe3e8;
+}
+
+.sapo-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f1f3f5;
+  color: #212b36;
+  vertical-align: middle;
+}
+
+.sapo-table tr:hover td {
+  background: #f9fafb;
+}
+
+/* Badge colors Sapo Style */
+.sapo-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.sapo-badge.success { background: #e3fcef; color: #0a8f4c; }
+.sapo-badge.warning { background: #fff5e6; color: #b76e00; }
+.sapo-badge.danger { background: #ffebee; color: #c62828; }
+.sapo-badge.info { background: #e0f2fe; color: #0369a1; }
+
+.sapo-trend {
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 6px;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.sapo-trend.up { background: #e3fcef; color: #0a8f4c; }
+.sapo-trend.down { background: #ffebee; color: #c62828; }
+
+/* Dashboard layout grid for widgets */
+.sapo-widget-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+}
+
+@media (min-width: 768px) {
+  .sapo-widget-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.space-y-6 > * + * {
+  margin-top: 24px;
+}
+
+.space-y-4 > * + * {
+  margin-top: 16px;
+}

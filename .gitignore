@@ -4,4 +4,9 @@ node_modules/
 logs/
 dist/
 scratch/
+
 data/
+.agent/
+.DS_Store
+wooddecor-extension/node_modules/
+wooddecor-extension/dist/

@@ -14,90 +14,7 @@ function getProductReportLimit() {
   return Math.min(Math.round(configuredLimit), 200);
 }
 
-/**
- * Đăng nhập Sapo Go và lấy danh sách đơn hàng trong khoảng thời gian (Legacy POS)
- */
-async function getOrdersFromSapoGo({ storeAlias, username, password, timeFrom, timeTo }) {
-  logger.info(`🌐 [PUPPETEER] Khởi chạy trình duyệt ẩn danh kết nối Sapo Go (${storeAlias}.mysapogo.com)...`);
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-web-security',
-      '--disable-features=IsolateOrigins,site-per-process'
-    ],
-  });
-
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 800 });
-  await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
-
-  try {
-    const loginUrl = `https://${storeAlias}.mysapogo.com/admin/orders`;
-    logger.info(`📡 Đi đến trang quản trị Sapo Go: ${loginUrl}`);
-    await page.goto(loginUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-
-    const currentUrl = page.url();
-    if (currentUrl.includes('accounts.sapo.vn') || currentUrl.includes('/login')) {
-      logger.info('🔑 Phát hiện trang đăng nhập Sapo Central Accounts. Tiến hành điền thông tin...');
-
-      const userSelector = 'input[name="Username"], input#Username, input#username, input[type="text"], input[type="email"]';
-      await page.waitForSelector(userSelector, { timeout: 20000 });
-      await page.focus(userSelector);
-      await page.type(userSelector, username, { delay: 50 });
-
-      const passSelector = 'input[name="Password"], input#Password, input#password, input[type="password"]';
-      const isPassVisible = await page.evaluate((sel) => {
-        const el = document.querySelector(sel);
-        if (!el) return false;
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).display !== 'none';
-      }, passSelector);
-
-      if (!isPassVisible) {
-        const nextBtnSelector = 'button[type="submit"], input[type="submit"], button#btnLogin, .btn-login, button.btn-next';
-        await page.click(nextBtnSelector);
-        await page.waitForSelector(passSelector, { timeout: 15000 });
-      }
-
-      await page.focus(passSelector);
-      await page.type(passSelector, password, { delay: 50 });
-
-      const submitBtnSelector = 'button[type="submit"], input[type="submit"], button#btnLogin, .btn-login';
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
-        page.click(submitBtnSelector)
-      ]);
-
-      logger.info('🎉 Đăng nhập Sapo Go thành công!');
-    }
-
-    await page.waitForFunction(() => window.location.href.includes('/admin'), { timeout: 20000 });
-
-    const fromIso = new Date(timeFrom * 1000).toISOString();
-    const toIso = new Date(timeTo * 1000).toISOString();
-
-    const rawOrders = await page.evaluate(async (from, to) => {
-      const apiUrl = `/admin/orders.json?created_on_min=${encodeURIComponent(from)}&created_on_max=${encodeURIComponent(to)}&limit=250`;
-      const response = await fetch(apiUrl);
-      if (!response.ok) {
-        throw new Error(`Sapo Go API return status ${response.status}`);
-      }
-      const data = await response.json();
-      return data.orders || [];
-    }, fromIso, toIso);
-
-    await browser.close();
-    return rawOrders;
-
-  } catch (err) {
-    logger.error(`❌ Lỗi cào dữ liệu đơn hàng Sapo Go: ${err.message}`);
-    await browser.close();
-    throw err;
-  }
-}
 
 /**
  * TRÍCH XUẤT SESSION XÁC THỰC MỚI BẰNG PUPPETEER
@@ -162,6 +79,14 @@ async function extractMarketplaceSession({ storeAlias, username, password }) {
     logger.info(`📡 Đi tới trang đăng nhập: ${loginUrl}`);
     await page.goto(loginUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
+    // Đợi tối đa 5 giây cho redirect client-side xảy ra nếu có
+    try {
+      await page.waitForFunction(() => {
+        const url = window.location.href;
+        return url.includes('accounts.sapo.vn') || url.includes('/login') || url.includes('/admin');
+      }, { timeout: 5000 });
+    } catch (_) {}
+
     const currentUrl = page.url();
     if (currentUrl.includes('accounts.sapo.vn') || currentUrl.includes('/login')) {
       logger.info('🔑 Tiến hành đăng nhập vào tài khoản Sapo...');
@@ -182,7 +107,7 @@ async function extractMarketplaceSession({ storeAlias, username, password }) {
 
       await page.type(passSelector, password, { delay: 50 });
       await Promise.all([
-        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }),
+        page.waitForNavigation({ waitUntil: 'load', timeout: 30000 }).catch(() => {}),
         page.click('button[type="submit"], input[type="submit"], button#btnLogin')
       ]);
       logger.info('🎉 Đăng nhập thành công!');
@@ -601,7 +526,159 @@ async function getMarketplaceReport({ storeAlias, username, password, targetDate
   }
 }
 
+/**
+ * LẤY BÁO CÁO HOẠT ĐỘNG KINH DOANH TRỰC TIẾP TỪ SAPO GO ANALYTICS API
+ */
+async function getBusinessActivitiesReport({ storeAlias, username, password, targetDate }) {
+  const cleanAlias = String(storeAlias)
+    .replace('.mysapogo.com', '')
+    .replace('.mysapo.net', '')
+    .trim();
+
+  logger.info(`🔍 [SAPO GO SCRAPE] Bắt đầu lấy báo cáo hoạt động kinh doanh cho store: ${cleanAlias} (targetDate: ${targetDate || 'today'})`);
+
+  // Phân tích định dạng targetDate (DD/MM/YYYY) thành YYYY-MM-DD
+  let queryDateStr = '';
+  if (targetDate) {
+    const parts = targetDate.split('/');
+    if (parts.length === 3) {
+      queryDateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
+    } else {
+      queryDateStr = targetDate;
+    }
+  } else {
+    const now = new Date();
+    const vnTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Ho_Chi_Minh' }));
+    const yyyy = vnTime.getFullYear();
+    const mm = String(vnTime.getMonth() + 1).padStart(2, '0');
+    const dd = String(vnTime.getDate()).padStart(2, '0');
+    queryDateStr = `${yyyy}-${mm}-${dd}`;
+  }
+
+  logger.info(`🌐 [PUPPETEER] Khởi chạy trình duyệt ẩn danh kết nối Sapo Go...`);
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-web-security'
+    ],
+  });
+
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1400, height: 900 });
+  await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+
+  try {
+    const loginUrl = `https://${cleanAlias}.mysapogo.com/admin/analytics/business_activities?type=by_time`;
+    logger.info(`📡 Đi đến trang quản trị Sapo Go: ${loginUrl}`);
+    await page.goto(loginUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+    try {
+      await page.waitForFunction(() => {
+        const url = window.location.href;
+        return url.includes('accounts.sapo.vn') || url.includes('/login') || url.includes('/admin');
+      }, { timeout: 5000 });
+    } catch (_) {}
+
+    const currentUrl = page.url();
+    if (currentUrl.includes('accounts.sapo.vn') || currentUrl.includes('/login')) {
+      logger.info('🔑 Phát hiện trang đăng nhập Sapo Central Accounts. Tiến hành điền thông tin...');
+
+      const userSelector = 'input[name="Username"], input#Username, input#username, input[type="text"], input[type="email"]';
+      await page.waitForSelector(userSelector, { timeout: 20000 });
+      await page.focus(userSelector);
+      await page.type(userSelector, username, { delay: 50 });
+
+      const passSelector = 'input[name="Password"], input#Password, input#password, input[type="password"]';
+      const isPassVisible = await page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && window.getComputedStyle(el).display !== 'none';
+      }, passSelector);
+
+      if (!isPassVisible) {
+        const nextBtnSelector = 'button[type="submit"], input[type="submit"], button#btnLogin, .btn-login, button.btn-next';
+        await page.click(nextBtnSelector);
+        await page.waitForSelector(passSelector, { timeout: 15000 });
+      }
+
+      await page.focus(passSelector);
+      await page.type(passSelector, password, { delay: 50 });
+
+      const submitBtnSelector = 'button[type="submit"], input[type="submit"], button#btnLogin, .btn-login';
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {}),
+        page.click(submitBtnSelector)
+      ]);
+    }
+
+    await page.waitForFunction((alias) => {
+      const href = window.location.href;
+      return href.includes(`${alias}.mysapogo.com/admin/analytics/business_activities`) && !href.includes('ReturnUrl');
+    }, { timeout: 35000 }, cleanAlias);
+
+    logger.info('⏳ Waiting 6 seconds for session and cookies to fully settle...');
+    await new Promise(r => setTimeout(r, 6000));
+
+    // Lấy token analytics
+    logger.info('Fetching tokens.json from admin panel...');
+    const token = await page.evaluate(async () => {
+      const res = await fetch('/admin/analytics/tokens.json');
+      return await res.text();
+    });
+
+    const queryStr = `SHOW orders,gross_sales,returns,taxes,shipping,total_sales,gross_profit BY pos_location_name,staff_name FROM costs SINCE ${queryDateStr} UNTIL ${queryDateStr}`;
+    logger.info(`Executing Sapo Analytics query for date ${queryDateStr}...`);
+
+    const queryResult = await page.evaluate(async (q, tokenVal) => {
+      try {
+        const tenantId = window.Sapo?.tenant?.id || window.Sapo?.store?.id || "156267";
+        const url = `https://analytics.sapo.vn/query?q=${encodeURIComponent(q)}&token=${encodeURIComponent(tokenVal)}&beta=true&timezone=Asia/Saigon`;
+        const res = await fetch(url, {
+          headers: {
+            "x-sapo-tenantid": String(tenantId),
+            "referer": window.location.origin + "/"
+          }
+        });
+        return {
+          status: res.status,
+          ok: res.ok,
+          data: await res.json()
+        };
+      } catch (err) {
+        return { error: err.message };
+      }
+    }, queryStr, token);
+
+    await browser.close();
+
+    if (!queryResult.ok || !queryResult.data?.result?.data) {
+      throw new Error(`Sapo Analytics API error (status ${queryResult.status}): ${JSON.stringify(queryResult.data || queryResult.error)}`);
+    }
+
+    const resultObj = queryResult.data.result;
+    const cols = resultObj.columns.map(c => c.field);
+    const rows = resultObj.data.map(row => {
+      const obj = {};
+      cols.forEach((col, idx) => {
+        obj[col] = row[idx];
+      });
+      return obj;
+    });
+
+    logger.info(`[SAPO GO SCRAPE] Lấy thành công ${rows.length} dòng báo cáo hoạt động kinh doanh.`);
+    return rows;
+
+  } catch (err) {
+    await browser.close();
+    logger.error(`❌ [SAPO GO SCRAPE] Thất bại khi cào báo cáo hoạt động kinh doanh: ${err.message}`);
+    throw err;
+  }
+}
+
 module.exports = {
-  getOrdersFromSapoGo,
-  getMarketplaceReport
+  getMarketplaceReport,
+  getBusinessActivitiesReport
 };

@@ -792,40 +792,15 @@ function buildMessageCard(data) {
 // ─────────────────────────────────────────────
 
 const UnifiedFields = [
-  // Primary Keys & Metadata
-  { field_name: 'Shop', type: 1 },
-  { field_name: 'Ten_San_Pham', type: 1 },
-  // Tab 1: Tổng Quan Fields
-  { field_name: 'So_Don_Hang', type: 2, property: { formatter: "0" } },
-  buildVndField('Gross_Sales'),
-  buildVndField('Net_Thuc_Nhan_Vi'),
-  buildVndField('Net_Du_Kien'),
-  buildVndField('Tong_Chi_Phi_San'),
-  buildVndField('AOV'),
-  // Tab 2: Đơn Hàng Fields
-  { field_name: 'Don_Bi_Huy', type: 2, property: { formatter: "0" } },
-  { field_name: 'Cho_Dong_Goi', type: 2, property: { formatter: "0" } },
-  { field_name: 'Cho_Lay_Hang', type: 2, property: { formatter: "0" } },
-  { field_name: 'Dang_Van_Chuyen', type: 2, property: { formatter: "0" } },
-  // Tab 3: Sản Phẩm Fields
-  { field_name: 'Phien_Ban', type: 1 },
-  { field_name: 'Ma_SKU', type: 1 },
-  { field_name: 'Gian_Hang', type: 1 },
-  { field_name: 'So_Luong_Da_Ban', type: 2, property: { formatter: "0" } },
-  buildVndField('Doanh_Thu_SP'),
-  { field_name: 'Don_Hang_Ban', type: 2, property: { formatter: "0" } },
-  { field_name: 'So_Luong_Huy_SP', type: 2, property: { formatter: "0" } },
-  { field_name: 'So_Luong_Don_Huy', type: 2, property: { formatter: "0" } },
-  { field_name: 'Ty_Le_Huy_SP', type: 2, property: { formatter: "0.00%" } },
-  // Tab 4: Doanh Thu Fields
-  buildVndField('Khuyen_Mai_Shop'),
-  // Tab 5: Chi Phí Fields
-  buildVndField('Phi_Thanh_Toan'),
-  buildVndField('Phi_Co_Dinh'),
-  buildVndField('Phi_Dich_Vu'),
-  buildVndField('Phi_Van_Chuyen'),
-  buildVndField('Chi_Phi_Da_Tra'),
-  buildVndField('Chi_Phi_Chua_Tra'),
+  { field_name: 'Tên chi nhánh', type: 1 },
+  { field_name: 'Tên nhân viên', type: 1 },
+  { field_name: 'SL đơn hàng', type: 2, property: { formatter: '0' } },
+  buildVndField('Tiền hàng'),
+  buildVndField('Tiền hàng trả lại'),
+  buildVndField('Tiền thuế'),
+  buildVndField('Phí giao hàng'),
+  buildVndField('Doanh thu'),
+  buildVndField('Lợi nhuận gộp'),
 ];
 
 
@@ -1279,7 +1254,7 @@ async function renamePrimaryField(appToken, tableId, newName, token) {
   }
 }
 
-async function clearTableRecordsForDate(appToken, tableId, reportDate, token) {
+async function clearTableRecordsForDate(appToken, tableId, reportDate, token, primaryFieldName = 'Ngày') {
   try {
     logger.info(
       `🧹 Đang quét và xóa dữ liệu cũ của ngày ${reportDate} trong bảng ${tableId} để chuẩn bị ghi đè...`,
@@ -1293,7 +1268,7 @@ async function clearTableRecordsForDate(appToken, tableId, reportDate, token) {
           conjunction: 'and',
           conditions: [
             {
-              field_name: 'Ngày báo cáo',
+              field_name: primaryFieldName,
               operator: 'is',
               value: [String(reportDate)]
             }
@@ -1364,131 +1339,75 @@ async function syncFinancialReportToLarkBase(reportData) {
   logger.info(`🔍 Đang tìm/tạo bảng "${tableName}" trong Lark Bitable (${dateStr})...`);
   const { tableId } = await getOrCreateTable(appToken, tableName, token);
 
-  // Luôn đổi tên trường khóa chính của bảng thành "Ngày báo cáo" để đảm bảo cột đầu tiên luôn đúng
-  await renamePrimaryField(appToken, tableId, 'Ngày báo cáo', token);
+  // Đổi tên trường khóa chính thành "Ngày"
+  await renamePrimaryField(appToken, tableId, 'Ngày', token);
+
+  // Lấy tên thực tế của trường khóa chính sau khi đã đổi tên (hoặc giữ nguyên nếu không đổi được)
+  const fieldsRes = await axiosWithRetry({
+    method: 'get',
+    url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/fields`,
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const fields = fieldsRes.data?.data?.items || [];
+  const primaryField = fields.find((f) => f.is_primary) || fields[0];
+  const primaryFieldName = primaryField ? primaryField.field_name : 'Ngày';
+  logger.info(`🎯 Trường khóa chính thực tế trên Lark Base là: "${primaryFieldName}"`);
 
   logger.info(
     `🛠️  Đang cấu hình các trường dữ liệu hợp nhất cho bảng "${tableName}"...`,
   );
   await ensureTableFields(appToken, tableId, UnifiedFields, token);
 
-  logger.info(`🎨 Đang cấu hình 2 tabs (Tổng quan + Sản phẩm) cho bảng "${tableName}"...`);
-  const tabs = ['Tổng quan', 'Sản phẩm'];
+  logger.info(`🎨 Đang cấu hình tab/view "TỔNG" cho bảng "${tableName}"...`);
+  const tabs = ['TỔNG'];
   await ensureTableViews(appToken, tableId, tabs, token);
   await configureTableViews(appToken, tableId, token);
 
   // Xóa sạch bản ghi cũ của riêng ngày báo cáo trước khi ghi dữ liệu mới
-  await clearTableRecordsForDate(appToken, tableId, dateStr, token);
+  await clearTableRecordsForDate(appToken, tableId, dateStr, token, primaryFieldName);
 
-  const timeNowStr = new Date().toLocaleString('vi-VN', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-  });
   const recordsToInsert = [];
 
-  // 1. Dòng gộp TỔNG HỆ THỐNG
-  recordsToInsert.push({
-    fields: {
-      'Ngày báo cáo': dateStr,
-      Shop: 'TỔNG HỆ THỐNG',
-      So_Don_Hang: Number(reportData.totalOrders || 0),
-      Gross_Sales: Number(reportData.totalRevenue || 0),
-      Net_Thuc_Nhan_Vi: Number(reportData.netRevenue || 0),
-      Net_Du_Kien: Number(reportData.expectedNetRevenue || 0),
-      Tong_Chi_Phi_San: Number(reportData.fees?.total || 0),
-      AOV: Number(reportData.avgPerOrder || 0),
-      Don_Bi_Huy: Number(reportData.cancelledCount || 0),
-      Cho_Dong_Goi: Number(reportData.pendingFulfillmentCount || 0),
-      Cho_Lay_Hang: Number(reportData.pendingConfirmationCount || 0),
-      Dang_Van_Chuyen: Number(reportData.shippingCount || 0),
-      Khuyen_Mai_Shop: Number(reportData.totalDiscount || 0),
-      Phi_Thanh_Toan: Number(reportData.fees?.transaction || 0),
-      Phi_Co_Dinh: Number(reportData.fees?.commission || 0),
-      Phi_Dich_Vu: Number(reportData.fees?.service || 0),
-      Phi_Van_Chuyen: Number(reportData.totalShippingFee || 0),
-      Chi_Phi_Da_Tra: Number(
-        (reportData.fees?.transaction || 0) +
-          (reportData.fees?.commission || 0) +
-          (reportData.fees?.service || 0),
-      ),
-      Chi_Phi_Chua_Tra: Math.max(
-        0,
-        Number(
-          (reportData.fees?.total || 0) -
-            ((reportData.fees?.transaction || 0) +
-              (reportData.fees?.commission || 0) +
-              (reportData.fees?.service || 0)),
-        ),
-      ),
-    },
-  });
-
-  // 2. 6 dòng Shop con
-  const shopBreakdown = reportData.shopeeShopBreakdown || {};
-  for (const [shopName, stats] of Object.entries(shopBreakdown)) {
-    const shopFees = stats.fees || {
-      total: 0,
-      transaction: 0,
-      commission: 0,
-      service: 0,
-      shipping: 0,
-    };
-    const shopNetExpected =
-      stats.netRevenue !== undefined
-        ? stats.netRevenue
-        : stats.revenue - shopFees.total;
-    const shopNetActual =
-      stats.netRevenueActual !== undefined ? stats.netRevenueActual : 0;
-    const shopChiPhiDaTra =
-      Number(shopFees.transaction || 0) +
-      Number(shopFees.commission || 0) +
-      Number(shopFees.service || 0);
-    const shopChiPhiChuaTra = Math.max(
-      0,
-      Number(shopFees.total || 0) - shopChiPhiDaTra,
-    );
-
-    recordsToInsert.push({
-      fields: {
-        'Ngày báo cáo': dateStr,
-        Shop: shopName,
-        So_Don_Hang: Number(stats.orders || 0),
-        Gross_Sales: Number(stats.revenue || 0),
-        Net_Thuc_Nhan_Vi: Number(shopNetActual),
-        Net_Du_Kien: Number(shopNetExpected),
-        Tong_Chi_Phi_San: Number(shopFees.total || 0),
-        AOV: stats.orders > 0 ? Math.round(stats.revenue / stats.orders) : 0,
-        Don_Bi_Huy: Number(stats.cancelledCount || 0),
-        Cho_Dong_Goi: 0,
-        Cho_Lay_Hang: 0,
-        Dang_Van_Chuyen: 0,
-        Khuyen_Mai_Shop: Number(stats.discount || 0),
-        Phi_Thanh_Toan: Number(shopFees.transaction || 0),
-        Phi_Co_Dinh: Number(shopFees.commission || 0),
-        Phi_Dich_Vu: Number(shopFees.service || 0),
-        Phi_Van_Chuyen: Number(shopFees.shipping || 0),
-        Chi_Phi_Da_Tra: Number(shopChiPhiDaTra),
-        Chi_Phi_Chua_Tra: Number(shopChiPhiChuaTra),
-      },
+  let sapoSales = [];
+  try {
+    const sapoGoScraper = require('./sapoGoScraper');
+    const sapoHelper = require('./sapo');
+    const { storeAlias } = sapoHelper.getSapoConfig();
+    const rows = await sapoGoScraper.getBusinessActivitiesReport({
+      storeAlias,
+      username: process.env.SAPO_GO_USERNAME,
+      password: process.env.SAPO_GO_PASSWORD,
+      targetDate: dateStr
     });
+    sapoSales = rows.map(r => ({
+      channel: r.pos_location_name || 'Kho LUXI Phạm Huy Thông',
+      employee: r.staff_name || 'Không rõ',
+      orders: Number(r.orders || 0),
+      goodsValue: Number(r.gross_sales || 0),
+      returnedValue: Number(r.returns || 0),
+      taxes: Number(r.taxes || 0),
+      shipping: Number(r.shipping || 0),
+      revenue: Number(r.total_sales || 0),
+      grossProfit: Number(r.gross_profit || 0)
+    }));
+  } catch (err) {
+    logger.warn(`⚠️ Sapo Go Scraper report query failed: ${err.message}`);
   }
 
-  // 3. Danh sách sản phẩm lấy từ Sapo Marketplace
-  const topProducts = reportData.topProducts || [];
-  for (const prod of topProducts) {
+  for (const item of sapoSales) {
     recordsToInsert.push({
       fields: {
-        'Ngày báo cáo': dateStr,
-        Ten_San_Pham: prod.name,
-        Phien_Ban: prod.variantName || '',
-        Ma_SKU: prod.sku || '',
-        Gian_Hang: prod.shopName || '',
-        So_Luong_Da_Ban: Number(prod.qty || 0),
-        Doanh_Thu_SP: Number(prod.revenue || 0),
-        Don_Hang_Ban: Number(prod.orderNumber || 0),
-        So_Luong_Huy_SP: Number(prod.cancelledQty || 0),
-        So_Luong_Don_Huy: Number(prod.cancelledOrderNumber || 0),
-        Ty_Le_Huy_SP: Number(prod.cancelledRate || 0) / 100,
-      },
+        'Ngày': dateStr,
+        'Tên chi nhánh': item.channel,
+        'Tên nhân viên': item.employee,
+        'SL đơn hàng': Number(item.orders || 0),
+        'Tiền hàng': Number(item.goodsValue || 0),
+        'Tiền hàng trả lại': Number(item.returnedValue || 0),
+        'Tiền thuế': Number(item.taxes || 0),
+        'Phí giao hàng': Number(item.shipping || 0),
+        'Doanh thu': Number(item.revenue || 0),
+        'Lợi nhuận gộp': Number(item.grossProfit || 0)
+      }
     });
   }
 
@@ -1510,7 +1429,7 @@ async function syncFinancialReportToLarkBase(reportData) {
   }
 
   logger.info(
-    `✅ Đồng bộ dữ liệu thành công sang bảng "${tableName}" với 2 Tabs (Tổng quan + Sản phẩm)!`,
+    `✅ Đồng bộ dữ liệu thành công sang bảng "${tableName}"!`,
   );
   logger.info(
     `🔗 URL truy cập trực tiếp: https://maxufactory.jp.larksuite.com/base/${appToken}?table=${tableId}`,
@@ -1530,4 +1449,5 @@ module.exports = {
   searchBitableRecordByField,
   upsertOrderToBase,
   syncFinancialReportToLarkBase,
+  getOrCreateTable,
 };

@@ -298,4 +298,6 @@ module.exports = {
   normalizeOrderWebhook,
   getOrdersFromApi,
   getStoreDomain,
+  getSapoConfig,
+  detectShopeeShopName,
 };
