@@ -166,8 +166,33 @@ router.post('/report/trigger', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+// LARK BASE MANUAL SYNC
+// ─────────────────────────────────────────────
+
+/**
+ * POST /api/base/sync
+ * Đồng bộ lại dữ liệu Sapo vào Lark Base cho 1 ngày cụ thể
+ * Body: { date: "31/05/2026" }  — định dạng DD/MM/YYYY
+ */
+router.post('/base/sync', async (req, res) => {
+  const dateStr = req.body?.date || '';
+  if (!dateStr) {
+    return res.status(400).json({ success: false, error: 'Thiếu tham số date (định dạng DD/MM/YYYY)' });
+  }
+  logger.info(`📌 [API] Manual sync Lark Base cho ngày: ${dateStr}`);
+  try {
+    await lark.syncFinancialReportToLarkBase({ reportDate: dateStr });
+    return res.json({ success: true, message: `Đã đồng bộ Lark Base cho ngày ${dateStr} thành công!` });
+  } catch (err) {
+    logger.error('[API] Sync Lark Base thất bại: ' + err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────
 // TOKEN MANAGEMENT
 // ─────────────────────────────────────────────
+
 
 /**
  * POST /api/token/refresh
