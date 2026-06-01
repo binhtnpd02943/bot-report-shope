@@ -310,33 +310,47 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
   const totalCommissionFee = Math.round(feeResults.reduce((acc, item) => acc + Number(item.yesterday.commission_fee || 0), 0) * scaleFactor);
   const totalServiceFee = Math.round(feeResults.reduce((acc, item) => acc + Number(item.yesterday.service_fee || 0), 0) * scaleFactor);
 
-  // GỌI API ĐỂ LẤY CHI TIẾT DOANH THU THỰC NHẬN (NET VÀO VÍ) CHO TỪNG GIAN HÀNG
-  logger.info(`📡 [SAPO GO SCRAPE] Đang cào doanh thu thực nhận (Net Ví) chi tiết cho ${activeConnIds.length} gian hàng Shopee...`);
+  // GỌI API ĐỂ LẤY CHI TIẾT DOANH THU THỰC NHẬN (NET VÀO VÍ) VÀ THỐNG KÊ ĐƠN CHO TỪNG GIAN HÀNG
+  logger.info(`📡 [SAPO GO SCRAPE] Đang cào doanh thu thực nhận (Net Ví) và live tasks chi tiết cho ${activeConnIds.length} gian hàng Shopee...`);
 
   const netPromises = activeConnIds.map(async (connId) => {
     const netUrl = `${baseUrl}/analytics/revenues?ids=${connId}&group=day&from=${timeFrom}&to=${timeTo}&zone=Asia/Saigon`;
+    const todayUrl = `${baseUrl}/analytics/orders/today?ids=${connId}&from=${thirtyDaysAgo}&to=${nowSec}&statuses=0,1,2,3,4,5,6,7,8,9&zone=Asia/Saigon`;
+    
+    let netRevenue = 0;
+    let liveTasks = { pending: 0, packed: 0, shipping: 0, in_cancelled: 0 };
+    
     try {
       const res = await axios.get(netUrl, { headers: authHeaders, timeout: 5000 });
       const revList = res.data?.revenues || [];
       const yesterdayRev = revList.find(r => r.time === reportDate) || { total: 0 };
-      return {
-        connId,
-        netRevenue: Number(yesterdayRev.total || 0)
-      };
+      netRevenue = Number(yesterdayRev.total || 0);
     } catch (err) {
       logger.error(`❌ [SAPO GO SCRAPE] Lỗi lấy Net Revenue cho shop #${connId}: ${err.message}`);
-      return {
-        connId,
-        netRevenue: 0
-      };
     }
+    
+    try {
+      const resToday = await axios.get(todayUrl, { headers: authHeaders, timeout: 5000 });
+      if (resToday.data) {
+        liveTasks = {
+          pending: Number(resToday.data.pending || 0),
+          packed: Number(resToday.data.packed || 0),
+          shipping: Number(resToday.data.shipping || 0),
+          in_cancelled: Number(resToday.data.in_cancelled || 0)
+        };
+      }
+    } catch (err) {
+      logger.error(`❌ [SAPO GO SCRAPE] Lỗi lấy Live Tasks cho shop #${connId}: ${err.message}`);
+    }
+    
+    return {
+      connId,
+      netRevenue,
+      liveTasks
+    };
   });
 
   const netResults = await Promise.all(netPromises);
-  const netMap = {};
-  netResults.forEach(item => {
-    netMap[item.connId] = item.netRevenue;
-  });
 
   // Format breakdown cửa hàng Shopee
   const shopeeShopBreakdown = {};
@@ -354,11 +368,17 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     const shopFees = feeMap[id] || { yesterday: { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 } };
     const shopYesterdayFee = shopFees.yesterday;
     const scaledShopFee = Math.round(Number(shopYesterdayFee.total || 0) * scaleFactor);
-    const shopNetActual = netMap[id] !== undefined ? netMap[id] : (0 - scaledShopFee);
+    
+    const shopRes = netResults.find(r => String(r.connId) === String(id)) || { netRevenue: 0, liveTasks: { pending: 0, packed: 0, shipping: 0, in_cancelled: 0 } };
+    const shopNetActual = shopRes.netRevenue !== undefined ? shopRes.netRevenue : (0 - scaledShopFee);
+    
     shopeeShopBreakdown[name] = {
       revenue: 0,
       orders: 0,
-      cancelledCount: 0,
+      cancelledCount: shopRes.liveTasks.in_cancelled,
+      pendingFulfillment: shopRes.liveTasks.pending,
+      pendingConfirmation: shopRes.liveTasks.packed,
+      shippingCount: shopRes.liveTasks.shipping,
       fees: {
         total: scaledShopFee,
         transaction: Math.round(Number(shopYesterdayFee.seller_transaction_fee || 0) * scaleFactor),
@@ -378,11 +398,17 @@ async function fetchMarketplaceReportFromApi({ authHeaders, connectionIds, shopM
     const shopFees = feeMap[b.connection_id] || { yesterday: { total: 0, seller_transaction_fee: 0, commission_fee: 0, service_fee: 0 } };
     const shopYesterdayFee = shopFees.yesterday;
     const scaledShopFee = Math.round(Number(shopYesterdayFee.total || 0) * scaleFactor);
-    const shopNetActual = netMap[b.connection_id] !== undefined ? netMap[b.connection_id] : (Number(b.current_total || 0) - scaledShopFee);
+    
+    const shopRes = netResults.find(r => String(r.connId) === String(b.connection_id)) || { netRevenue: 0, liveTasks: { pending: 0, packed: 0, shipping: 0, in_cancelled: 0 } };
+    const shopNetActual = shopRes.netRevenue !== undefined ? shopRes.netRevenue : (Number(b.current_total || 0) - scaledShopFee);
+    
     shopeeShopBreakdown[name] = {
       revenue: Number(b.current_total || 0),
       orders: Number(b.quantity || 0),
-      cancelledCount: 0,
+      cancelledCount: shopRes.liveTasks.in_cancelled,
+      pendingFulfillment: shopRes.liveTasks.pending,
+      pendingConfirmation: shopRes.liveTasks.packed,
+      shippingCount: shopRes.liveTasks.shipping,
       fees: {
         total: scaledShopFee,
         transaction: Math.round(Number(shopYesterdayFee.seller_transaction_fee || 0) * scaleFactor),

@@ -791,17 +791,37 @@ function buildMessageCard(data) {
 // LARK BASE FINANCIAL REPORTS SYNCING
 // ─────────────────────────────────────────────
 
+// Fields thống nhất cho bảng gộp duy nhất "BÁO CÁO HÀNG NGÀY"
 const UnifiedFields = [
+  // --- SAPO FIELDS ---
   { field_name: 'Tên chi nhánh', type: 1 },
   { field_name: 'Tên nhân viên', type: 1 },
-  { field_name: 'SL đơn hàng', type: 2, property: { formatter: '0' } },
   buildVndField('Tiền hàng'),
   buildVndField('Tiền hàng trả lại'),
   buildVndField('Tiền thuế'),
   buildVndField('Phí giao hàng'),
   buildVndField('Doanh thu'),
   buildVndField('Lợi nhuận gộp'),
+  
+  // --- SHARED FIELDS ---
+  { field_name: 'SL đơn hàng', type: 2, property: { formatter: '0' } },
+  
+  // --- SHOPEE FIELDS ---
+  { field_name: 'Shop', type: 1 },
+  { field_name: 'Tên sản phẩm', type: 1 }, // Ngay sau Shop
+  buildVndField('Gross Sales'),
+  buildVndField('Doanh thu thực nhận'),
+  buildVndField('Tổng phí sàn'),
+  buildVndField('Phí thanh toán'),
+  buildVndField('Phí cố định'),
+  buildVndField('Phí dịch vụ'),
+  { field_name: 'Đơn bị hủy', type: 2, property: { formatter: '0' } },
+  { field_name: 'Chờ đóng gói', type: 2, property: { formatter: '0' } },
+  { field_name: 'Chờ lấy hàng', type: 2, property: { formatter: '0' } },
+  { field_name: 'Đang vận chuyển', type: 2, property: { formatter: '0' } },
 ];
+
+
 
 
 
@@ -973,7 +993,7 @@ async function ensureTableViews(appToken, tableId, viewNames, token) {
     const keepViewNames = new Set(viewNames);
 
     // Xóa các tab cũ không còn dùng & view mặc định hệ thống
-    const OBSOLETE_VIEWS = new Set(['Đơn hàng', 'Doanh thu', 'Chi phí', 'Tổng quan', 'Sản phẩm']);
+    const OBSOLETE_VIEWS = new Set(['Đơn hàng', 'Doanh thu', 'Chi phí', 'Sản phẩm']);
     for (const v of latestViews) {
       const isSystemDefault =
         v.view_name.includes('表格视图') ||
@@ -1000,10 +1020,41 @@ async function ensureTableViews(appToken, tableId, viewNames, token) {
   }
 }
 
-// configureTableViews: chỉ còn tab "TỔNG" duy nhất — không cần cấu hình filter/ẩn cột
-async function configureTableViews(_appToken, _tableId, _token) {
-  // Tab TỔNG hiển thị tất cả cột, không cần filter hay ẩn cột
-  // Hàm giữ lại để tương thích với lời gọi trong syncFinancialReportToLarkBase
+/**
+ * configureTableViews — Ẩn các trường hệ thống của Lark Base (type >= 1001) và ẩn cột chéo giữa 2 Tab TỔNG & Tổng quan
+ */
+async function configureTableViews(appToken, tableId, token) {
+  try {
+    const fieldsRes = await axiosWithRetry({
+      method: 'get',
+      url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/fields`,
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const fieldsItems = fieldsRes.data?.data?.items || [];
+    const systemFieldIds = fieldsItems.filter(f => f.type >= 1001).map(f => f.field_id);
+
+    const viewsRes = await axiosWithRetry({
+      method: 'get',
+      url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/views`,
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const views = viewsRes.data?.data?.items || [];
+
+    for (const view of views) {
+      try {
+        await axiosWithRetry({
+          method: 'patch',
+          url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/views/${view.view_id}`,
+          data: { property: { hidden_fields: systemFieldIds } },
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+        });
+      } catch (e) {
+        logger.warn(`⚠️ Không ẩn được cột hệ thống cho View "${view.view_name}": ${e.message}`);
+      }
+    }
+  } catch (err) {
+    logger.error(`⚠️ Lỗi cấu hình các chế độ xem: ${err.message}`);
+  }
 }
 
 async function upsertBitableRecord(
@@ -1196,43 +1247,111 @@ async function clearTableRecordsForDate(appToken, tableId, reportDate, token, pr
 async function syncFinancialReportToLarkBase(reportData) {
   const token = await getTenantAccessToken();
   const dateStr = reportData.reportDate || '';
-
-  // Tên bảng cố định — tất cả dữ liệu ghi vào 1 bảng duy nhất, append theo ngày
-  const tableName = 'BÁO CÁO HÀNG NGÀY';
   const appToken = process.env.LARK_BASE_APP_TOKEN || 'JJ4cbywbXalFOOsK4iCj2bvNpAd';
 
-  logger.info(`🔍 Đang tìm/tạo bảng "${tableName}" trong Lark Bitable (${dateStr})...`);
+  // 1. Tạo/Tìm bảng gộp duy nhất "BÁO CÁO HÀNG NGÀY"
+  const tableName = 'BÁO CÁO HÀNG NGÀY';
+  logger.info(`🔍 Đang tìm/tạo bảng thống nhất "${tableName}" trong Lark Bitable...`);
   const { tableId } = await getOrCreateTable(appToken, tableName, token);
 
-  // Đổi tên trường khóa chính thành "Ngày"
   await renamePrimaryField(appToken, tableId, 'Ngày', token);
+  await ensureTableFields(appToken, tableId, UnifiedFields, token);
+  await ensureTableViews(appToken, tableId, ['TỔNG', 'Tổng quan'], token);
 
-  // Lấy tên thực tế của trường khóa chính sau khi đã đổi tên (hoặc giữ nguyên nếu không đổi được)
+  // 2. Lấy danh sách Fields & Views thực tế để lấy ID
   const fieldsRes = await axiosWithRetry({
     method: 'get',
     url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/fields`,
     headers: { Authorization: `Bearer ${token}` }
   });
   const fields = fieldsRes.data?.data?.items || [];
-  const primaryField = fields.find((f) => f.is_primary) || fields[0];
-  const primaryFieldName = primaryField ? primaryField.field_name : 'Ngày';
-  logger.info(`🎯 Trường khóa chính thực tế trên Lark Base là: "${primaryFieldName}"`);
+  const fieldsMapByName = new Map(fields.map(f => [f.field_name, f]));
 
-  logger.info(
-    `🛠️  Đang cấu hình các trường dữ liệu hợp nhất cho bảng "${tableName}"...`,
-  );
-  await ensureTableFields(appToken, tableId, UnifiedFields, token);
+  const viewsRes = await axiosWithRetry({
+    method: 'get',
+    url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/views`,
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const views = viewsRes.data?.data?.items || [];
+  const viewTong = views.find(v => v.view_name === 'TỔNG');
+  const viewTongQuan = views.find(v => v.view_name === 'Tổng quan');
 
-  logger.info(`🎨 Đang cấu hình tab/view "TỔNG" cho bảng "${tableName}"...`);
-  const tabs = ['TỔNG'];
-  await ensureTableViews(appToken, tableId, tabs, token);
-  await configureTableViews(appToken, tableId, token);
+  // Cấu hình View TỔNG:
+  // - Ẩn tất cả cột Shopee
+  // - Lọc: Tên chi nhánh isNotEmpty
+  if (viewTong) {
+    logger.info('⚙️ Cấu hình ẩn cột và bộ lọc cho View: "TỔNG"...');
+    const shopeeColNames = ['Shop', 'Tên sản phẩm', 'Gross Sales', 'Doanh thu thực nhận', 'Tổng phí sàn', 'Phí thanh toán', 'Phí cố định', 'Phí dịch vụ', 'Đơn bị hủy', 'Chờ đóng gói', 'Chờ lấy hàng', 'Đang vận chuyển'];
+    const hiddenFieldIds = shopeeColNames.map(name => fieldsMapByName.get(name)?.field_id).filter(Boolean);
+    
+    // Ẩn các cột hệ thống (type >= 1001)
+    fields.filter(f => f.type >= 1001).forEach(f => hiddenFieldIds.push(f.field_id));
+    
+    const filterFieldId = fieldsMapByName.get('Tên chi nhánh')?.field_id;
+    
+    const payload = {
+      property: {
+        hidden_fields: hiddenFieldIds,
+        filter_info: {
+          conjunction: 'and',
+          conditions: [
+            {
+              field_id: filterFieldId,
+              operator: 'isNotEmpty'
+            }
+          ]
+        }
+      }
+    };
+    
+    await axiosWithRetry({
+      method: 'patch',
+      url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/views/${viewTong.view_id}`,
+      data: payload,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+  }
 
-  // Xóa sạch bản ghi cũ của riêng ngày báo cáo trước khi ghi dữ liệu mới
-  await clearTableRecordsForDate(appToken, tableId, dateStr, token, primaryFieldName);
+  // Cấu hình View Tổng quan:
+  // - Ẩn tất cả cột Sapo
+  // - Lọc: Shop isNotEmpty
+  if (viewTongQuan) {
+    logger.info('⚙️ Cấu hình ẩn cột và bộ lọc cho View: "Tổng quan"...');
+    const sapoColNames = ['Tên chi nhánh', 'Tên nhân viên', 'Tiền hàng', 'Tiền hàng trả lại', 'Tiền thuế', 'Phí giao hàng', 'Doanh thu', 'Lợi nhuận gộp'];
+    const hiddenFieldIds = sapoColNames.map(name => fieldsMapByName.get(name)?.field_id).filter(Boolean);
+    
+    // Ẩn các cột hệ thống (type >= 1001)
+    fields.filter(f => f.type >= 1001).forEach(f => hiddenFieldIds.push(f.field_id));
+    
+    const filterFieldId = fieldsMapByName.get('Shop')?.field_id;
+    
+    const payload = {
+      property: {
+        hidden_fields: hiddenFieldIds,
+        filter_info: {
+          conjunction: 'and',
+          conditions: [
+            {
+              field_id: filterFieldId,
+              operator: 'isNotEmpty'
+            }
+          ]
+        }
+      }
+    };
+    
+    await axiosWithRetry({
+      method: 'patch',
+      url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/views/${viewTongQuan.view_id}`,
+      data: payload,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+  }
 
-  const recordsToInsert = [];
+  // 3. Quét sạch các bản ghi cũ của ngày này trên bảng thống nhất BÁO CÁO HÀNG NGÀY
+  await clearTableRecordsForDate(appToken, tableId, dateStr, token, 'Ngày');
 
+  // 4. Lấy dữ liệu Sapo POS
   let sapoSales = [];
   try {
     const sapoGoScraper = require('./sapoGoScraper');
@@ -1254,16 +1373,38 @@ async function syncFinancialReportToLarkBase(reportData) {
       shipping: Number(r.shipping || 0),
       revenue: Number(r.total_sales || 0),
       grossProfit: Number(r.gross_profit || 0)
-    }))
-    // ✅ Loại bỏ các dòng không có hoạt động (Sapo Analytics trả về tất cả tổ hợp kể cả dòng 0)
-    .filter(item => item.orders > 0 || item.goodsValue > 0 || item.revenue > 0);
+    })).filter(item => item.orders > 0 || item.goodsValue > 0 || item.revenue > 0);
 
-    logger.info(`📊 Sau khi lọc dòng hợp lệ: ${sapoSales.length} record sẽ được ghi vào Lark Base.`);
+    logger.info(`📊 Lấy thành công ${sapoSales.length} dòng báo cáo hoạt động kinh doanh Sapo.`);
   } catch (err) {
     logger.warn(`⚠️ Sapo Go Scraper report query failed: ${err.message}`);
   }
 
-  for (const item of sapoSales) {
+  // 5. Lấy dữ liệu Shopee shop
+  let shopeeShopBreakdown = reportData.shopeeShopBreakdown;
+  let topProducts = reportData.topProducts;
+  if (!shopeeShopBreakdown) {
+    try {
+      logger.info(`🔍 Đang tự động cào dữ liệu Shopee Marketplace cho ngày ${dateStr}...`);
+      const sapoGoScraper = require('./sapoGoScraper');
+      const marketplaceReport = await sapoGoScraper.getMarketplaceReport({
+        storeAlias: process.env.SAPO_STORE_ALIAS,
+        username: process.env.SAPO_GO_USERNAME,
+        password: process.env.SAPO_GO_PASSWORD,
+        targetDate: dateStr
+      });
+      shopeeShopBreakdown = marketplaceReport?.shopeeShopBreakdown;
+      topProducts = marketplaceReport?.topProducts;
+    } catch (err) {
+      logger.warn(`⚠️ Lỗi tự động cào dữ liệu Shopee Marketplace (bỏ qua): ${err.message}`);
+    }
+  }
+
+  // 6. Gộp toàn bộ bản ghi Sapo & Shopee vào chung một mảng
+  const recordsToInsert = [];
+
+  // Thêm bản ghi Sapo POS
+  sapoSales.forEach(item => {
     recordsToInsert.push({
       fields: {
         'Ngày': dateStr,
@@ -1278,31 +1419,60 @@ async function syncFinancialReportToLarkBase(reportData) {
         'Lợi nhuận gộp': Number(item.grossProfit || 0)
       }
     });
-  }
-
-  logger.info(
-    `📤 Đang thực hiện ghi hàng loạt ${recordsToInsert.length} bản ghi vào bảng "${tableName}"...`,
-  );
-  const insertRes = await axiosWithRetry({
-    method: 'post',
-    url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/records/batch_create`,
-    data: { records: recordsToInsert },
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    }
   });
 
-  if (insertRes.data.code !== 0) {
-    throw new Error(`Lỗi ghi hàng loạt vào Lark Base: ${insertRes.data.msg}`);
+  // Thêm bản ghi Shopee shop
+  if (shopeeShopBreakdown) {
+    for (const [shopName, shopData] of Object.entries(shopeeShopBreakdown)) {
+      let shopProductsSummary = '';
+      if (topProducts && topProducts.length > 0) {
+        const shopProds = topProducts
+          .filter(p => p.shopName === shopName && Number(p.qty || 0) > 0)
+          .sort((a, b) => b.qty - a.qty);
+        
+        if (shopProds.length > 0) {
+          shopProductsSummary = shopProds
+            .map((p, idx) => `${idx + 1}. ${p.name} (Bán: ${p.qty} | Doanh số: ${new Intl.NumberFormat('vi-VN').format(p.revenue)}đ | Hủy: ${p.cancelledQty || 0})`)
+            .join('\n');
+        }
+      }
+
+      recordsToInsert.push({
+        fields: {
+          'Ngày': dateStr,
+          'Shop': shopName,
+          'Tên sản phẩm': shopProductsSummary,
+          'SL đơn hàng': Number(shopData.orders || 0),
+          'Gross Sales': Number(shopData.revenue || 0),
+          'Doanh thu thực nhận': Number(shopData.netRevenueActual || 0),
+          'Tổng phí sàn': Number(shopData.fees?.total || 0),
+          'Phí thanh toán': Number(shopData.fees?.transaction || 0),
+          'Phí cố định': Number(shopData.fees?.commission || 0),
+          'Phí dịch vụ': Number(shopData.fees?.service || 0),
+          'Đơn bị hủy': Number(shopData.cancelledCount || 0),
+          'Chờ đóng gói': Number(shopData.pendingFulfillment || 0),
+          'Chờ lấy hàng': Number(shopData.pendingConfirmation || 0),
+          'Đang vận chuyển': Number(shopData.shippingCount || 0)
+        }
+      });
+    }
   }
 
-  logger.info(
-    `✅ Đồng bộ dữ liệu thành công sang bảng "${tableName}"!`,
-  );
-  logger.info(
-    `🔗 URL truy cập trực tiếp: https://maxufactory.jp.larksuite.com/base/${appToken}?table=${tableId}`,
-  );
+  // 7. Ghi hàng loạt tất cả bản ghi vào bảng duy nhất BÁO CÁO HÀNG NGÀY
+  if (recordsToInsert.length > 0) {
+    logger.info(`📤 Đang ghi hàng loạt ${recordsToInsert.length} bản ghi gộp Sapo & Shopee vào "${tableName}"...`);
+    const insertRes = await axiosWithRetry({
+      method: 'post',
+      url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/records/batch_create`,
+      data: { records: recordsToInsert },
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    });
+    if (insertRes.data.code !== 0) {
+      throw new Error(`Lỗi ghi dữ liệu gộp vào Lark Base: ${insertRes.data.msg}`);
+    }
+  }
+
+  logger.info(`✅ Đồng bộ dữ liệu thành công vào bảng duy nhất với 2 Tab View độc lập!`);
 }
 
 module.exports = {
