@@ -973,7 +973,7 @@ async function ensureTableViews(appToken, tableId, viewNames, token) {
     const keepViewNames = new Set(viewNames);
 
     // Xóa các tab cũ không còn dùng & view mặc định hệ thống
-    const OBSOLETE_VIEWS = new Set(['Đơn hàng', 'Doanh thu', 'Chi phí']);
+    const OBSOLETE_VIEWS = new Set(['Đơn hàng', 'Doanh thu', 'Chi phí', 'Tổng quan', 'Sản phẩm']);
     for (const v of latestViews) {
       const isSystemDefault =
         v.view_name.includes('表格视图') ||
@@ -1000,145 +1000,10 @@ async function ensureTableViews(appToken, tableId, viewNames, token) {
   }
 }
 
-async function configureTableViews(appToken, tableId, token) {
-  try {
-    const fieldsRes = await axiosWithRetry({
-      method: 'get',
-      url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/fields`,
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const fieldsItems = fieldsRes.data?.data?.items || [];
-    const fieldMap = {};
-    let primaryFieldId = '';
-    fieldsItems.forEach((f) => {
-      fieldMap[f.field_name] = f.field_id;
-      if (f.is_primary) {
-        primaryFieldId = f.field_id;
-      }
-    });
-    if (!primaryFieldId && fieldsItems.length > 0) {
-      primaryFieldId = fieldsItems[0].field_id;
-    }
-
-    const viewsRes = await axiosWithRetry({
-      method: 'get',
-      url: `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/views`,
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const views = viewsRes.data?.data?.items || [];
-
-    const viewConfigs = {
-      // ═══════════════════════════════════════════════════════
-      // TAB 1: TỔNG QUAN
-      // Gộp toàn bộ: Định danh → Đơn hàng/Vận hành → Doanh thu → Chi phí
-      // Lọc theo Shop (ẩn row sản phẩm, chỉ hiện row shop/tổng hệ thống)
-      // ═══════════════════════════════════════════════════════
-      'Tổng quan': {
-        show: [
-          // [1] Định danh
-          'Ngày báo cáo',
-          'Shop',
-          // [2] Đơn hàng & Vận hành
-          'So_Don_Hang',
-          'Don_Bi_Huy',
-          'Cho_Dong_Goi',
-          'Cho_Lay_Hang',
-          'Dang_Van_Chuyen',
-          // [3] Doanh thu
-          'Gross_Sales',
-          'Khuyen_Mai_Shop',
-          'Net_Du_Kien',
-          'Net_Thuc_Nhan_Vi',
-          'AOV',
-          // [4] Chi phí
-          'Tong_Chi_Phi_San',
-          'Phi_Thanh_Toan',
-          'Phi_Co_Dinh',
-          'Phi_Dich_Vu',
-          'Phi_Van_Chuyen',
-          'Chi_Phi_Da_Tra',
-          'Chi_Phi_Chua_Tra',
-        ],
-        filterField: 'Shop',
-      },
-      // ═══════════════════════════════════════════════════════
-      // TAB 2: SẢN PHẨM
-      // Hiệu suất từng sản phẩm/SKU: Định danh → Hiệu suất → Hủy
-      // Lọc theo Tên sản phẩm (chỉ hiện row sản phẩm)
-      // ═══════════════════════════════════════════════════════
-      'Sản phẩm': {
-        show: [
-          // [1] Định danh
-          'Ngày báo cáo',
-          'Ten_San_Pham',
-          'Phien_Ban',
-          'Ma_SKU',
-          'Gian_Hang',
-          // [2] Hiệu suất bán hàng
-          'So_Luong_Da_Ban',
-          'Don_Hang_Ban',
-          'Doanh_Thu_SP',
-          // [3] Hủy
-          'So_Luong_Huy_SP',
-          'So_Luong_Don_Huy',
-          'Ty_Le_Huy_SP',
-        ],
-        filterField: 'Ten_San_Pham',
-      },
-    };
-
-    for (const view of views) {
-      const config = viewConfigs[view.view_name];
-      if (config) {
-        logger.info(
-          `⚙️  Đang cấu hình bộ lọc & ẩn cột cho View "${view.view_name}"...`,
-        );
-        const filterFieldId = fieldMap[config.filterField];
-        const hiddenFields = Object.keys(fieldMap)
-          .filter(
-            (name) =>
-              !config.show.includes(name) && fieldMap[name] !== primaryFieldId,
-          )
-          .map((name) => fieldMap[name]);
-
-        const patchPayload = {
-          property: {
-            filter_info: {
-              conjunction: 'and',
-              conditions: [
-                {
-                  field_id: filterFieldId,
-                  operator: 'isNotEmpty',
-                },
-              ],
-            },
-            hidden_fields: hiddenFields,
-          },
-        };
-
-        const patchUrl = `${LARK_BASE_URL}/bitable/v1/apps/${appToken}/tables/${tableId}/views/${view.view_id}`;
-        const patchRes = await axiosWithRetry({
-          method: 'patch',
-          url: patchUrl,
-          data: patchPayload,
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          }
-        });
-
-        if (patchRes.data.code !== 0) {
-          logger.error(
-            `❌ Lỗi khi cấu hình View ${view.view_name}: ${patchRes.data.msg}`,
-          );
-        } else {
-          logger.info(`✅ Đã cấu hình View "${view.view_name}" thành công!`);
-        }
-      }
-    }
-  } catch (err) {
-    logger.error(`⚠️ Lỗi cấu hình các chế độ xem: ${err.message}`);
-  }
+// configureTableViews: chỉ còn tab "TỔNG" duy nhất — không cần cấu hình filter/ẩn cột
+async function configureTableViews(_appToken, _tableId, _token) {
+  // Tab TỔNG hiển thị tất cả cột, không cần filter hay ẩn cột
+  // Hàm giữ lại để tương thích với lời gọi trong syncFinancialReportToLarkBase
 }
 
 async function upsertBitableRecord(
