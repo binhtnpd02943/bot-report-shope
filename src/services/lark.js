@@ -1389,7 +1389,11 @@ async function syncFinancialReportToLarkBase(reportData) {
       shipping: Number(r.shipping || 0),
       revenue: Number(r.total_sales || 0),
       grossProfit: Number(r.gross_profit || 0)
-    }));
+    }))
+    // ✅ Loại bỏ các dòng không có hoạt động (Sapo Analytics trả về tất cả tổ hợp kể cả dòng 0)
+    .filter(item => item.orders > 0 || item.goodsValue > 0 || item.revenue > 0);
+
+    logger.info(`📊 Sau khi lọc dòng hợp lệ: ${sapoSales.length} record sẽ được ghi vào Lark Base.`);
   } catch (err) {
     logger.warn(`⚠️ Sapo Go Scraper report query failed: ${err.message}`);
   }
