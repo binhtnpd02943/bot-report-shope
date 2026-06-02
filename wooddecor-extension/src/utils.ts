@@ -15,8 +15,8 @@ export const getTableData = async () => {
   const views = await table.getViewMetaList();
   const GridViewMeta = views.find((view) => view.type === ViewType.Grid);
   const view = await table.getViewById(GridViewMeta!.id);
-  // 获取视图下的 records & fields
-  const records = await view.getVisibleRecordIdList();
+  // 获取表中的所有 records ID (bỏ qua bộ lọc của view)
+  const records = await table.getRecordIdList();
   const fieldMetas = await view.getFieldMetaList();
   // 获取每个单元格的值
   const recordValues = await Promise.all(

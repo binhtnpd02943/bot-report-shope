@@ -19,6 +19,8 @@ const UnifiedFields = [
   
   // --- SHARED FIELDS ---
   { field_name: 'SL đơn hàng', type: 2, property: { formatter: '0' } },
+  { field_name: 'Kênh bán hàng', type: 1 }, // Tự động điền "Sapo POS" hoặc "Shopee"
+  bitable.buildVndField('Doanh thu gộp'),    // Tự động gộp Doanh thu Sapo và Gross Sales Shopee
   
   // --- SHOPEE FIELDS ---
   { field_name: 'Shop', type: 1 },
@@ -40,8 +42,8 @@ async function syncFinancialReportToLarkBase(reportData) {
   const dateStr = reportData.reportDate || '';
   const appToken = process.env.LARK_BASE_APP_TOKEN || 'JJ4cbywbXalFOOsK4iCj2bvNpAd';
 
-  // 1. Tạo/Tìm bảng gộp duy nhất "BÁO CÁO HÀNG NGÀY"
-  const tableName = 'BÁO CÁO HÀNG NGÀY';
+  // 1. Tạo/Tìm bảng gộp duy nhất
+  const tableName = reportData.tableName || 'BÁO CÁO HÀNG NGÀY';
   logger.info(`🔍 Đang tìm/tạo bảng thống nhất "${tableName}" trong Lark Bitable...`);
   const { tableId } = await bitable.getOrCreateTable(appToken, tableName, token);
 
@@ -202,6 +204,8 @@ async function syncFinancialReportToLarkBase(reportData) {
         'Tên chi nhánh': item.channel,
         'Tên nhân viên': item.employee,
         'SL đơn hàng': Number(item.orders || 0),
+        'Kênh bán hàng': 'Sapo POS',
+        'Doanh thu gộp': Number(item.revenue || 0),
         'Tiền hàng': Number(item.goodsValue || 0),
         'Tiền hàng trả lại': Number(item.returnedValue || 0),
         'Tiền thuế': Number(item.taxes || 0),
@@ -234,6 +238,8 @@ async function syncFinancialReportToLarkBase(reportData) {
           'Shop': shopName,
           'Tên sản phẩm': shopProductsSummary,
           'SL đơn hàng': Number(shopData.orders || 0),
+          'Kênh bán hàng': 'Shopee',
+          'Doanh thu gộp': Number(shopData.revenue || 0),
           'Gross Sales': Number(shopData.revenue || 0),
           'Doanh thu thực nhận': Number(shopData.netRevenueActual || 0),
           'Tổng phí sàn': Number(shopData.fees?.total || 0),

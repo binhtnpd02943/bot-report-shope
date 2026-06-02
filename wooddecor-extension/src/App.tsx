@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { useAsync } from 'react-async-hook';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { 
-  DollarSign, ShoppingBag, RefreshCcw, AlertTriangle, Package, Warehouse,
-  TrendingUp, ShoppingCart, Percent, Trash2, ArrowUpRight, Award, Server,
-  User, Users, Layers
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  PieChart, Pie, Cell, Legend
+} from 'recharts';
+import { 
+  DollarSign, ShoppingBag, RefreshCcw, AlertTriangle, 
+  Award, TrendingUp, HelpCircle
 } from 'lucide-react';
 import { getTableData } from './utils';
 import './App.css';
@@ -30,12 +32,10 @@ function getCellValue(cellValue: any): any {
 }
 
 export const App = () => {
-  // Fetch raw Bitable columns and record dataSource
   const response = useAsync(getTableData, []);
-  const [activeTab, setActiveTab] = useState<'omni' | 'employee' | 'combined' | 'marketplace'>('omni');
   const [selectedDate, setSelectedDate] = useState<string>('');
 
-  // 1. Process Bitable Data
+  // 1. Process Bitable Data & Fields
   const processedData = useMemo(() => {
     if (!response.result) return null;
     const { columns, dataSource } = response.result;
@@ -46,41 +46,42 @@ export const App = () => {
       idToNameMap[col.dataIndex] = col.title;
     });
 
-    // Translate raw row attributes using field names
+    // Translate raw row attributes using actual Bitable field names
     const parsedRecords = dataSource.map((row: any) => {
       const parsedRow: Record<string, any> = { recordId: row.recordId };
       Object.keys(row).forEach((key) => {
         if (key === 'recordId') return;
         const fieldName = idToNameMap[key];
         if (fieldName) {
-          let normalizedName = fieldName;
-          // Normalize to expected key names for dashboard compatibility
-          if (fieldName === 'Ngày') normalizedName = 'NGÀY';
-          if (fieldName === 'Tên chi nhánh') normalizedName = 'KÊNH BÁN';
-          if (fieldName === 'Tên nhân viên') normalizedName = 'NHÂN VIÊN';
-          if (fieldName === 'Doanh thu') normalizedName = 'DOANH THU';
-          
-          parsedRow[normalizedName] = getCellValue(row[key]);
-          
-          // Also keep the original fieldName just in case
-          if (normalizedName !== fieldName) {
-            parsedRow[fieldName] = getCellValue(row[key]);
-          }
+          parsedRow[fieldName] = getCellValue(row[key]);
         }
       });
+
+      // Smart dynamic fallback: in case 'Kênh bán hàng' or 'Doanh thu gộp' are not physically present,
+      // calculate them in-memory to ensure dashboard is 100% robust and backwards-compatible!
+      if (!parsedRow['Kênh bán hàng']) {
+        if (parsedRow['Tên chi nhánh']) {
+          parsedRow['Kênh bán hàng'] = 'Sapo POS';
+        } else if (parsedRow['Shop']) {
+          parsedRow['Kênh bán hàng'] = 'Shopee';
+        }
+      }
+
+      if (!parsedRow['Doanh thu gộp']) {
+        if (parsedRow['Kênh bán hàng'] === 'Sapo POS') {
+          parsedRow['Doanh thu gộp'] = Number(parsedRow['Doanh thu'] || 0);
+        } else if (parsedRow['Kênh bán hàng'] === 'Shopee') {
+          parsedRow['Doanh thu gộp'] = Number(parsedRow['Gross Sales'] || 0);
+        }
+      }
+
       return parsedRow;
     });
 
-    // Check if it has core financial fields
-    const hasRequiredFields = parsedRecords.some(r => 'NGÀY' in r && 'KÊNH BÁN' in r);
-    if (!hasRequiredFields) {
-      return { isCompatible: false, records: [] };
-    }
-
-    // Get all unique dates sorted descending
+    // Determine the unique list of dates in the dataset, sorted descending
     const dates = Array.from(new Set(
       parsedRecords
-        .map(r => r['NGÀY'])
+        .map(r => r['Ngày'])
         .filter(Boolean)
     )).sort((a: any, b: any) => {
       const partsA = a.split('/');
@@ -93,19 +94,19 @@ export const App = () => {
       return b.localeCompare(a);
     });
 
-    return { isCompatible: true, records: parsedRecords, dates };
+    return { records: parsedRecords, dates };
   }, [response.result]);
 
-  // Handle active date selector
+  // Determine active date (default to latest date in the dataset)
   const activeDate = useMemo(() => {
     if (!processedData || !processedData.dates || processedData.dates.length === 0) return '';
     if (selectedDate && processedData.dates.includes(selectedDate)) return selectedDate;
-    return processedData.dates[0]; // default to latest
+    return processedData.dates[0];
   }, [processedData, selectedDate]);
 
-  // 2. Filter and calculate metrics based on 7-day rolling window ending on activeDate
-  const analytics = useMemo(() => {
-    if (!processedData || !processedData.isCompatible || !activeDate) return null;
+  // Calculate dynamic metrics based on a 7-day rolling window ending on activeDate
+  const dashboardData = useMemo(() => {
+    if (!processedData || !activeDate) return null;
 
     // Helper to generate 7-day list ending on activeDate
     const get7DaysList = (endDateStr: string) => {
@@ -124,314 +125,295 @@ export const App = () => {
       return dates;
     };
 
-    const targetDates = get7DaysList(activeDate);
-    const rolling7DayRecords = processedData.records.filter(r => targetDates.includes(r['NGÀY']));
+    const target7Days = get7DaysList(activeDate);
+    const rollingRecords = processedData.records.filter(r => target7Days.includes(r['Ngày']));
 
-    // [Layer 1] Total System Rows over the 7 days
-    const grossSales = rolling7DayRecords.reduce((acc, r) => acc + Number(r['Tiền hàng'] || r['DOANH THU'] || 0), 0);
-    const shopeeSales = rolling7DayRecords
-      .filter(r => String(r['KÊNH BÁN'] || '').startsWith('SHOPEE'))
-      .reduce((acc, r) => acc + Number(r['Tiền hàng'] || r['DOANH THU'] || 0), 0);
+    // --- 1. KPI CARD COMPUTATIONS ---
+    const totalRevenue = rollingRecords.reduce((acc, r) => acc + Number(r['Doanh thu gộp'] || 0), 0);
+    const totalOrders = rollingRecords.reduce((acc, r) => acc + Number(r['SL đơn hàng'] || 0), 0);
     
-    const shopeeFees = Math.round(shopeeSales * 0.125); // Shopee fees are ~12.5% of sales
-    const expectedNet = rolling7DayRecords.reduce((acc, r) => acc + Number(r['Lợi nhuận gộp'] || r['DOANH THU'] || 0), 0);
-    const netRevenue = rolling7DayRecords.reduce((acc, r) => acc + Number(r['Doanh thu'] || r['DOANH THU'] || 0), 0);
+    // Shopee Net Revenue (Thực nhận)
+    const shopeeNetRevenue = rollingRecords
+      .filter(r => r['Kênh bán hàng'] === 'Shopee')
+      .reduce((acc, r) => acc + Number(r['Doanh thu thực nhận'] || 0), 0);
+
+    // Best Employee (Nhân viên xuất sắc nhất)
+    const employeeSalesMap: Record<string, { name: string; revenue: number; orders: number }> = {};
+    rollingRecords
+      .filter(r => r['Kênh bán hàng'] === 'Sapo POS' && r['Tên nhân viên'] && r['Tên nhân viên'] !== 'Không rõ')
+      .forEach(r => {
+        const name = r['Tên nhân viên'];
+        if (!employeeSalesMap[name]) {
+          employeeSalesMap[name] = { name, revenue: 0, orders: 0 };
+        }
+        employeeSalesMap[name].revenue += Number(r['Doanh thu'] || 0);
+        employeeSalesMap[name].orders += Number(r['SL đơn hàng'] || 0);
+      });
     
-    const totalOrders = rolling7DayRecords.reduce((acc, r) => {
-      if ('SL đơn hàng' in r) {
-        return acc + Number(r['SL đơn hàng'] || 0);
-      }
-      const rev = Number(r['DOANH THU'] || 0);
-      if (rev === 0) return acc;
-      const isShopee = String(r['KÊNH BÁN'] || '').startsWith('SHOPEE');
-      const aov = isShopee ? 180000 : 250000;
-      return acc + Math.max(1, Math.round(rev / aov));
-    }, 0);
+    const sortedEmployees = Object.values(employeeSalesMap).sort((a, b) => b.revenue - a.revenue);
+    const bestEmployee = sortedEmployees[0] || { name: 'Không có', orders: 0 };
 
-    // Fulfillment indicators calculated dynamically based on system metrics
-    let hash = 0;
-    for (let i = 0; i < activeDate.length; i++) {
-      hash = activeDate.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const seed = Math.abs(hash);
-    const pendingApproval = 10 + (seed % 25); 
-    const pendingPayment = 40 + (seed % 60); 
-    const pendingPacking = 20 + (seed % 35); 
-    const pendingPickup = 2 + (seed % 8); 
-    const shipping = 15 + (seed % 25); 
-    const cancelled = Math.floor(totalOrders * 0.04);
+    // --- 2. CHART COMPUTATIONS ---
+    // A. Pie Chart: Tỷ trọng doanh thu theo Shopee Shop (7 ngày) - Chỉ gồm 6 shop Shopee!
+    const shopeeShopRevenueMap: Record<string, number> = {};
+    const shopeeTotalRev = rollingRecords
+      .filter(r => r['Kênh bán hàng'] === 'Shopee')
+      .reduce((acc, r) => acc + Number(r['Doanh thu gộp'] || 0), 0);
 
-    // Dynamic Sapo historical chart data over 7 days ending on activeDate
-    const salesChartData = targetDates.slice().reverse().map(date => {
-      const dayRecords = processedData.records.filter(r => r['NGÀY'] === date);
-      const val = dayRecords.reduce((acc, r) => acc + Number(r['Doanh thu'] || r['DOANH THU'] || 0), 0);
+    rollingRecords
+      .filter(r => r['Kênh bán hàng'] === 'Shopee' && r['Shop'])
+      .forEach(r => {
+        const name = r['Shop'];
+        shopeeShopRevenueMap[name] = (shopeeShopRevenueMap[name] || 0) + Number(r['Doanh thu gộp'] || 0);
+      });
+
+    const shopRatioData = Object.entries(shopeeShopRevenueMap)
+      .map(([name, value]) => ({
+        name: name.replace(' Wood - Decor', '').replace(' DECOR', '').replace(' LUXI', '').replace('LUXI', '').trim(),
+        value,
+        percentage: shopeeTotalRev ? (value / shopeeTotalRev) * 100 : 0
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    // B. Bar Chart: Doanh thu chi nhánh Sapo 7 ngày qua - Hiển thị theo từng ngày (25/5 -> 31/5)
+    const sorted7DaysAsc = target7Days.slice().reverse();
+    const branchChartData = sorted7DaysAsc.map(date => {
+      const daySapoRevenue = rollingRecords
+        .filter(r => r['Kênh bán hàng'] === 'Sapo POS' && r['Ngày'] === date)
+        .reduce((acc, r) => acc + Number(r['Doanh thu'] || 0), 0);
+      
       const shortDate = date.split('/').slice(0, 2).join('/'); // 'DD/MM'
       return {
-        date: shortDate,
-        value: val
+        name: shortDate,
+        value: daySapoRevenue
       };
     });
 
-    // [Layer 2] Shop-level Rows (physical branches) aggregated over 7 days
-    const branchMap: Record<string, any> = {};
-    rolling7DayRecords.forEach(r => {
-      const name = r['KÊNH BÁN'] || 'Khác';
-      if (!branchMap[name]) {
-        branchMap[name] = {
-          'Shop': name,
-          'Doanh_Thu': 0,
-          'Don_Hang_Moi': 0,
-          'Don_Tra_Hang': 0,
-          'Don_Huy': 0
-        };
-      }
-      const rev = Number(r['DOANH THU'] || 0);
-      const hasRealFields = 'Tiền hàng' in r;
-      
-      const branchRevenue = hasRealFields ? Number(r['Doanh thu'] || 0) : rev;
-      const branchOrders = hasRealFields ? Number(r['SL đơn hàng'] || 0) : 0;
-      const branchReturned = hasRealFields ? Number(r['Tiền hàng trả lại'] || 0) : 0;
-      
-      const isShopee = name.startsWith('SHOPEE');
-      const aov = isShopee ? 180000 : 250000;
-      const orders = rev > 0 ? Math.max(1, Math.round(rev / aov)) : 0;
-      const cancelled = rev > 0 ? Math.floor((hasRealFields ? branchOrders : orders) * 0.04) : 0;
+    // C. Bar Chart: Đóng góp doanh thu của nhân viên Sapo
+    const employeeChartData = sortedEmployees.map(emp => ({
+      name: emp.name.split('-')[0].trim(), // Shorten for aesthetics
+      value: emp.revenue,
+      displayValue: (emp.revenue / 1000000).toFixed(1) + 'M'
+    })).slice(0, 5); // top 5 employees
 
-      branchMap[name]['Doanh_Thu'] += branchRevenue;
-      branchMap[name]['Don_Hang_Moi'] += hasRealFields ? branchOrders : orders;
-      branchMap[name]['Don_Tra_Hang'] += branchReturned;
-      branchMap[name]['Don_Huy'] += cancelled;
-    });
-    const branchRecords = Object.values(branchMap);
-
-    // [Layer 3] Product-level Rows aggregated over 7 days (realistic fallback since product rows are not stored in simple base)
-    const topProducts = [
-      { name: 'Kệ gỗ để đồ đa năng LUXI', qty: 25 + (seed % 15), sku: 'KE-GO-01', revenue: 3500000 },
-      { name: 'Khay mây tròn tự nhiên Decor', qty: 18 + (seed % 10), sku: 'KHAY-MAY-02', revenue: 1800000 },
-      { name: 'Đèn gốm Bát Tràng Cao Cấp', qty: 12 + (seed % 8), sku: 'DEN-GOM-03', revenue: 2100000 },
-      { name: 'Giỏ cói đựng đồ LUXI Home', qty: 10 + (seed % 6), sku: 'GIO-COI-04', revenue: 800000 },
-      { name: 'Lọ hoa thuỷ tinh Bắc Âu', qty: 7 + (seed % 5), sku: 'LO-HOA-05', revenue: 420000 }
-    ];
-
-    return {
-      grossSales,
-      netRevenue,
-      expectedNet,
-      shopeeFees,
-      totalOrders,
-      pendingApproval,
-      pendingPayment,
-      pendingPacking,
-      pendingPickup,
-      shipping,
-      cancelled,
-      salesChartData,
-      topProducts,
-      branchRecords
-    };
-  }, [processedData, activeDate]);
-
-  // 3. Process Employee Data dynamically based on activeDate (Rolling 7-day window)
-  const employeeData = useMemo(() => {
-    if (!processedData || !processedData.isCompatible || !activeDate) return null;
-    
-    // Parse target dates list for 7-day window
-    const parts = activeDate.split('/');
-    const dates: string[] = [];
-    if (parts.length === 3) {
-      const end = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(end);
-        d.setDate(end.getDate() - i);
-        const dd = String(d.getDate()).padStart(2, '0');
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        const yyyy = d.getFullYear();
-        dates.push(`${dd}/${mm}/${yyyy}`);
-      }
-    } else {
-      dates.push(activeDate);
-    }
-    
-    const rolling7DayRecords = processedData.records.filter(r => dates.includes(r['NGÀY']));
-
-    const empMap: Record<string, any> = {};
-    rolling7DayRecords.forEach(r => {
-      const name = r['NHÂN VIÊN'] || 'Khác';
-      if (!empMap[name]) {
-        empMap[name] = {
-          name,
-          orders: 0,
-          goodsAmt: 0,
-          tax: 0,
-          delivery: 0,
-          returned: 0,
-          revenue: 0,
-          profit: 0
-        };
-      }
-      const rev = Number(r['DOANH THU'] || 0);
-      const hasRealFields = 'Tiền hàng' in r;
-
-      if (hasRealFields) {
-        empMap[name].orders += Number(r['SL đơn hàng'] || 0);
-        empMap[name].goodsAmt += Number(r['Tiền hàng'] || 0);
-        empMap[name].tax += Number(r['Tiền thuế'] || 0);
-        empMap[name].delivery += Number(r['Phí giao hàng'] || 0);
-        empMap[name].returned += Number(r['Tiền hàng trả lại'] || 0);
-        empMap[name].revenue += Number(r['Doanh thu'] || 0);
-        empMap[name].profit += Number(r['Lợi nhuận gộp'] || 0);
-      } else {
-        const isShopee = String(r['KÊNH BÁN'] || '').startsWith('SHOPEE');
-        const aov = isShopee ? 180000 : 250000;
-        const orders = rev > 0 ? Math.max(1, Math.round(rev / aov)) : 0;
-        const profit = Math.round(rev * 0.95); // Presumed 95% profit margin
-
-        empMap[name].orders += orders;
-        empMap[name].goodsAmt += rev;
-        empMap[name].revenue += rev;
-        empMap[name].profit += profit;
-        if (name.includes('Tiến') || name.includes('TIẾN')) {
-          empMap[name].tax += Math.round(rev * 0.05); // 5% tax attribution
+    // D. Stacked Bar Chart: Cơ cấu phí sàn Shopee
+    const shopeeShopFeeMap: Record<string, { shop: string; payment: number; commission: number; service: number }> = {};
+    rollingRecords
+      .filter(r => r['Kênh bán hàng'] === 'Shopee' && r['Shop'])
+      .forEach(r => {
+        const shop = r['Shop'];
+        if (!shopeeShopFeeMap[shop]) {
+          shopeeShopFeeMap[shop] = { shop, payment: 0, commission: 0, service: 0 };
         }
-      }
-    });
-    
-    const sortedList = Object.values(empMap).sort((a, b) => b.revenue - a.revenue);
-    
-    let totalOrders = sortedList.reduce((acc, e) => acc + e.orders, 0);
-    let totalGoodsAmt = sortedList.reduce((acc, e) => acc + e.goodsAmt, 0);
-    let totalTax = sortedList.reduce((acc, e) => acc + e.tax, 0);
-    let totalReturned = sortedList.reduce((acc, e) => acc + e.returned, 0);
-    let totalDelivery = sortedList.reduce((acc, e) => acc + e.delivery, 0);
-    let totalRevenue = sortedList.reduce((acc, e) => acc + e.revenue, 0);
-    let totalProfit = sortedList.reduce((acc, e) => acc + e.profit, 0);
-    
-    const chartData = sortedList
-      .filter(emp => emp.revenue > 0)
-      .map(emp => {
-        const parts = emp.name.split('-');
-        const shortName = parts[0].trim();
-        return {
-          name: shortName,
-          value: emp.revenue
-        };
+        shopeeShopFeeMap[shop].payment += Number(r['Phí thanh toán'] || 0);
+        shopeeShopFeeMap[shop].commission += Number(r['Phí cố định'] || 0);
+        shopeeShopFeeMap[shop].service += Number(r['Phí dịch vụ'] || 0);
       });
-      
+    
+    const stackedBarData = Object.values(shopeeShopFeeMap).map(item => ({
+      name: item.shop.replace(' Wood - Decor', '').replace(' DECOR', ''), // Shorten name
+      'Phí thanh toán': item.payment,
+      'Phí cố định': item.commission,
+      'Phí dịch vụ': item.service,
+      'Tổng phí': item.payment + item.commission + item.service
+    }));
+
+    // --- 3. DETAIL TABLES COMPUTATIONS ---
+    // A. Sapo Detailed Branch Activity Table
+    const sapoBranchActivity: Record<string, any> = {};
+    rollingRecords
+      .filter(r => r['Kênh bán hàng'] === 'Sapo POS' && r['Tên chi nhánh'])
+      .forEach(r => {
+        const name = r['Tên chi nhánh'];
+        if (!sapoBranchActivity[name]) {
+          sapoBranchActivity[name] = { name, orders: 0, revenue: 0, profit: 0 };
+        }
+        sapoBranchActivity[name].orders += Number(r['SL đơn hàng'] || 0);
+        sapoBranchActivity[name].revenue += Number(r['Doanh thu'] || 0);
+        sapoBranchActivity[name].profit += Number(r['Lợi nhuận gộp'] || 0);
+      });
+    
+    const sapoTableRows = Object.values(sapoBranchActivity).map(item => ({
+      ...item,
+      aov: item.orders > 0 ? Math.round(item.revenue / item.orders) : 0
+    })).sort((a, b) => b.revenue - a.revenue);
+
+    // B. Sapo Detailed Employee Activity Table
+    const sapoEmployeeActivity: Record<string, any> = {};
+    rollingRecords
+      .filter(r => r['Kênh bán hàng'] === 'Sapo POS' && r['Tên nhân viên'] && r['Tên nhân viên'] !== 'Không rõ')
+      .forEach(r => {
+        const name = r['Tên nhân viên'];
+        if (!sapoEmployeeActivity[name]) {
+          sapoEmployeeActivity[name] = { 
+            name, 
+            orders: 0, 
+            goodsAmt: 0, 
+            returned: 0, 
+            tax: 0, 
+            delivery: 0, 
+            revenue: 0, 
+            profit: 0 
+          };
+        }
+        sapoEmployeeActivity[name].orders += Number(r['SL đơn hàng'] || 0);
+        sapoEmployeeActivity[name].goodsAmt += Number(r['Tiền hàng'] || 0);
+        sapoEmployeeActivity[name].returned += Number(r['Tiền hàng trả lại'] || 0);
+        sapoEmployeeActivity[name].tax += Number(r['Tiền thuế'] || 0);
+        sapoEmployeeActivity[name].delivery += Number(r['Phí giao hàng'] || 0);
+        sapoEmployeeActivity[name].revenue += Number(r['Doanh thu'] || 0);
+        sapoEmployeeActivity[name].profit += Number(r['Lợi nhuận gộp'] || 0);
+      });
+    
+    const sapoEmployeeRows = Object.values(sapoEmployeeActivity).sort((a, b) => b.revenue - a.revenue);
+
+    const employeeTotals = sapoEmployeeRows.reduce((acc, row) => ({
+      orders: acc.orders + row.orders,
+      goodsAmt: acc.goodsAmt + row.goodsAmt,
+      returned: acc.returned + row.returned,
+      tax: acc.tax + row.tax,
+      delivery: acc.delivery + row.delivery,
+      revenue: acc.revenue + row.revenue,
+      profit: acc.profit + row.profit
+    }), { orders: 0, goodsAmt: 0, returned: 0, tax: 0, delivery: 0, revenue: 0, profit: 0 });
+
+    // C. Shopee Detailed Shop Financial Table
+    const shopeeShopFinancial: Record<string, any> = {};
+    rollingRecords
+      .filter(r => r['Kênh bán hàng'] === 'Shopee' && r['Shop'])
+      .forEach(r => {
+        const name = r['Shop'];
+        if (!shopeeShopFinancial[name]) {
+          shopeeShopFinancial[name] = { 
+            name, 
+            grossSales: 0, 
+            commissionFee: 0, 
+            shippingFee: 0, 
+            netRevenue: 0, 
+            paymentFee: 0, 
+            orders: 0 
+          };
+        }
+        shopeeShopFinancial[name].grossSales += Number(r['Gross Sales'] || 0);
+        shopeeShopFinancial[name].commissionFee += Number(r['Phí cố định'] || 0);
+        shopeeShopFinancial[name].shippingFee += Number(r['Phí dịch vụ'] || 0); // stack service fee in shipping fee column
+        shopeeShopFinancial[name].netRevenue += Number(r['Doanh thu thực nhận'] || 0);
+        shopeeShopFinancial[name].paymentFee += Number(r['Phí thanh toán'] || 0);
+        shopeeShopFinancial[name].orders += Number(r['SL đơn hàng'] || 0);
+      });
+
+    const shopeeTableRows = Object.values(shopeeShopFinancial).sort((a, b) => b.grossSales - a.grossSales);
+
     return {
-      list: sortedList,
-      chartData,
-      totalOrders,
-      totalGoodsAmt,
-      totalTax,
-      totalReturned,
-      totalDelivery,
       totalRevenue,
-      totalProfit
+      totalOrders,
+      shopeeNetRevenue,
+      bestEmployee,
+      shopRatioData,
+      branchChartData,
+      employeeChartData,
+      stackedBarData,
+      sapoTableRows,
+      sapoEmployeeRows,
+      employeeTotals,
+      shopeeTableRows
     };
   }, [processedData, activeDate]);
 
-  // High fidelity 6 Shopee Shops connection status matching Screenshot 3
-  const shopeeShopsData = [
-    { stt: 1, name: 'LUMY Wood - Decor', status: 'Đang hoạt động', date: '30/09/2021', products: '0/600', orders: '0/618', total: 1222022, growth: '+7%', isUp: true },
-    { stt: 2, name: 'LUXI DECOR HCM', status: 'Đang hoạt động', date: '05/09/2022', products: '0/819', orders: '0/1640', total: 3055129, growth: '-67%', isUp: false },
-    { stt: 3, name: 'MAYcolor', status: 'Đang hoạt động', date: '11/03/2026', products: '0/303', orders: '0/15', total: 0, growth: '0%', isUp: null },
-    { stt: 4, name: 'Xưởng LUXI DECOR', status: 'Đang hoạt động', date: '11/03/2026', products: '0/681', orders: '0/405', total: 751328, growth: '-85%', isUp: false },
-    { stt: 5, name: 'LUXI DECOR HÀ NỘI', status: 'Đang hoạt động', date: '11/03/2026', products: '0/659', orders: '0/880', total: 108000, growth: '-95%', isUp: false },
-    { stt: 6, name: 'LUXIDecor', status: 'Đang hoạt động', date: '11/03/2026', products: '0/326', orders: '0/283', total: 931476, growth: '-3%', isUp: false }
-  ];
-
-  // Render Loader
+  // Loading indicator
   if (response.loading) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: '#f4f6f8', color: '#637381' }}>
-        <RefreshCcw className="animate-spin" size={28} style={{ color: '#0088ff', marginBottom: 12 }} />
-        <span style={{ fontSize: 13, fontWeight: 600 }}>Đang nạp dữ liệu Sapo ERP...</span>
+      <div className="loader-container">
+        <RefreshCcw className="animate-spin text-blue-500" size={36} />
+        <span className="loader-text">Đang tải cấu hình WoodDecor Dashboard...</span>
       </div>
     );
   }
 
-  // Check compatibility
-  if (processedData && !processedData.isCompatible) {
+  // Handle empty base data compatibility
+  if (processedData && processedData.records.length === 0) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: '#f4f6f8', color: '#212b36', padding: 24, textAlign: 'center' }}>
-        <AlertTriangle size={48} style={{ color: '#f59e0b', marginBottom: 16 }} />
-        <h3 style={{ margin: '0 0 8px 0', fontSize: 16, fontWeight: 700 }}>Chế độ xem không tương thích</h3>
-        <p style={{ color: '#637381', fontSize: 12, maxWidth: 460, lineHeight: 1.6, margin: '0 0 20px 0' }}>
-          Giao diện Bảng điều khiển này yêu cầu cấu trúc của bảng **`BÁO CÁO HÀNG NGÀY`** với các trường dữ liệu tối giản: *NGÀY*, *NHÂN VIÊN*, *KÊNH BÁN*, *DOANH THU*...
-        </p>
-        <div style={{ background: '#ffffff', border: '1px solid #dfe3e8', borderRadius: 8, padding: '16px 20px', fontSize: 11, color: '#637381', maxWidth: 460 }}>
-          <strong>💡 Mẹo:</strong> Hãy nhấp mở sheet **`BÁO CÁO HÀNG NGÀY`** ở cột menu bên trái Lark Base, chế độ xem biểu đồ sẽ tự động kích hoạt lập tức!
-        </div>
+      <div className="empty-container">
+        <AlertTriangle size={56} className="text-yellow-500 mb-4" />
+        <h3>Chưa có dữ liệu đồng bộ</h3>
+        <p>Bảng **`BÁO CÁO HÀNG NGÀY`** hiện đang trống. Hãy chạy đồng bộ từ Sapo POS/Shopee trước để kích hoạt Dashboard!</p>
       </div>
     );
   }
 
-  const fmtVND = (v: number) => new Intl.NumberFormat('vi-VN').format(v) + ' đ';
-  const fmtVNDShort = (v: number) => new Intl.NumberFormat('vi-VN').format(v);
+  const fmtVND = (v: number) => {
+    if (v >= 1000000) {
+      return (v / 1000000).toFixed(1) + 'M đ';
+    }
+    return new Intl.NumberFormat('vi-VN').format(v) + ' đ';
+  };
 
-  const totalBranchRevenue = analytics ? analytics.branchRecords.reduce((acc: number, b: any) => acc + b.Doanh_Thu, 0) : 0;
-  const totalBranchOrders = analytics ? analytics.branchRecords.reduce((acc: number, b: any) => acc + b.Don_Hang_Moi, 0) : 0;
-  const totalBranchReturned = analytics ? analytics.branchRecords.reduce((acc: number, b: any) => acc + b.Don_Tra_Hang, 0) : 0;
-  const totalBranchCancelled = analytics ? analytics.branchRecords.reduce((acc: number, b: any) => acc + b.Don_Huy, 0) : 0;
+  const fmtCurrency = (v: number) => {
+    return new Intl.NumberFormat('vi-VN').format(v) + ' đ';
+  };
 
-  const topBranch = analytics && analytics.branchRecords.length > 0 
-    ? analytics.branchRecords.slice().sort((a: any, b: any) => b.Doanh_Thu - a.Doanh_Thu)[0].Shop 
-    : 'Kho LUXI Phạm Huy Thông';
-
-  const topEmployee = employeeData && employeeData.list.length > 0
-    ? `${employeeData.list[0].name} (${employeeData.list[0].orders} đơn)`
-    : 'KIỀU HCM (93 đơn)';
+  const fmtNum = (v: number) => new Intl.NumberFormat('vi-VN').format(v);
 
   return (
     <div className="dashboard-container">
-      {/* Executive Header */}
-      <header className="sapo-tabs-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', background: '#ffffff', borderRadius: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', marginBottom: 24 }}>
-        <div className="sapo-brand" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, color: '#fff', background: 'linear-gradient(135deg, #3b82f6, #60a5fa)' }}>
-            W
+      {/* Background ambient glow shapes for glassmorphism */}
+      <div className="ambient-glow glow-1"></div>
+      <div className="ambient-glow glow-2"></div>
+      <div className="ambient-glow glow-3"></div>
+
+      {/* Modern Executive Frosted Glass Header */}
+      <header className="glass-header">
+        <div className="header-brand">
+          <div className="brand-logo-cube">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2 17L12 22L22 17" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2 12L12 17L22 12" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
           </div>
-          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: '#212b36', letterSpacing: '-0.3px' }}>
-            WoodDecor Báo Cáo Tổng Hợp
-          </h3>
+          <div className="brand-text">
+            <h2>WoodDecor Dashboard</h2>
+            <span className="brand-subtitle">Báo cáo Tổng Hợp 7 Ngày qua (All-in-One)</span>
+          </div>
         </div>
 
-        <div className="sapo-date-picker" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {processedData && processedData.dates && processedData.dates.length > 0 && (
-            <>
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#637381' }}>Ngày đối soát:</span>
+        {/* Date Controller */}
+        <div className="header-controls">
+          <div className="date-selector-wrapper">
+            <span className="control-label">Ngày đối soát gộp (Chu kỳ 7 ngày):</span>
+            {processedData && processedData.dates && (
               <select 
-                className="sapo-select" 
+                className="glass-select" 
                 value={activeDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                style={{ padding: '6px 12px', borderRadius: 8, border: '1px solid #dfe3e8', fontSize: 11, fontWeight: 700, color: '#212b36', cursor: 'pointer', outline: 'none' }}
               >
                 {processedData.dates.map((date) => (
                   <option key={date} value={date}>{date}</option>
                 ))}
               </select>
-            </>
-          )}
+            )}
+          </div>
+          <button className="icon-btn" title="Cài đặt">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
         </div>
       </header>
 
-      {analytics && employeeData && (
-        <div className="space-y-6">
-          {/* Card Title */}
-          <div className="sapo-card" style={{ padding: '16px 20px', marginBottom: 16 }}>
-            <h4 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#212b36' }}>
-              📊 BÁO CÁO HOẠT ĐỘNG KINH DOANH TỔNG HỢP 7 NGÀY QUA (Tính đến {activeDate})
-            </h4>
-          </div>
-
-          {/* Master KPI Row */}
-          <div className="sapo-kpi-grid">
+      {dashboardData && (
+        <div className="dashboard-content-layout">
+          
+          {/* Row 1: KPI Cards Grid */}
+          <section className="sapo-kpi-grid">
             <div className="sapo-kpi-card">
               <div className="sapo-kpi-icon-wrapper blue">
                 <DollarSign size={20} />
               </div>
               <div className="sapo-kpi-info">
-                <span className="sapo-kpi-label">Tổng doanh thu hệ thống</span>
-                <span className="sapo-kpi-val">{fmtVND(employeeData.totalRevenue)}</span>
+                <span className="sapo-kpi-label">Tổng doanh thu hệ thống (7 ngày)</span>
+                <span className="sapo-kpi-val">{fmtCurrency(dashboardData.totalRevenue)}</span>
               </div>
             </div>
 
@@ -440,197 +422,291 @@ export const App = () => {
                 <ShoppingBag size={20} />
               </div>
               <div className="sapo-kpi-info">
-                <span className="sapo-kpi-label">Tổng đơn hàng toàn hệ thống</span>
-                <span className="sapo-kpi-val">{employeeData.totalOrders} đơn</span>
+                <span className="sapo-kpi-label">Tổng đơn hàng gộp (7 ngày)</span>
+                <span className="sapo-kpi-val">{fmtNum(dashboardData.totalOrders)} đơn</span>
               </div>
             </div>
 
             <div className="sapo-kpi-card">
               <div className="sapo-kpi-icon-wrapper orange">
-                <Warehouse size={20} />
+                <TrendingUp size={20} />
               </div>
               <div className="sapo-kpi-info">
-                <span className="sapo-kpi-label">Chi nhánh dẫn đầu</span>
-                <span className="sapo-kpi-val" style={{ fontSize: 13, fontWeight: 700 }}>{topBranch}</span>
+                <span className="sapo-kpi-label">Shopee thực nhận (7 ngày)</span>
+                <span className="sapo-kpi-val">{fmtCurrency(dashboardData.shopeeNetRevenue)}</span>
               </div>
             </div>
 
             <div className="sapo-kpi-card">
-              <div className="sapo-kpi-icon-wrapper red">
+              <div className="sapo-kpi-icon-wrapper purple">
                 <Award size={20} />
               </div>
               <div className="sapo-kpi-info">
-                <span className="sapo-kpi-label">Nhân viên xuất sắc nhất</span>
-                <span className="sapo-kpi-val" style={{ fontSize: 13, fontWeight: 700 }}>{topEmployee}</span>
+                <span className="sapo-kpi-label">Nhân viên xuất sắc nhất (7 ngày)</span>
+                <span className="sapo-kpi-val" style={{ fontSize: 13, fontWeight: 700 }}>
+                  {dashboardData.bestEmployee.name} ({dashboardData.bestEmployee.orders} đơn)
+                </span>
               </div>
             </div>
-          </div>
+          </section>
 
-          {/* Side-by-side Comparative Charts */}
-          <div className="sapo-split-layout-equal">
-            {/* Branch revenue 7-day trend */}
-            <div className="sapo-card">
-              <h4 className="sapo-card-title">Doanh thu chi nhánh 7 ngày qua</h4>
-              <div style={{ width: '100%', height: 220 }}>
+          {/* Row 2: 3 Side-by-Side Comparative Charts (3 Columns) */}
+          <section className="middle-charts-grid">
+            
+            {/* Pie Chart: Tỷ trọng doanh thu Shopee Shop */}
+            <div className="glass-card chart-card flex-col">
+              <div className="card-header-with-action">
+                <h3 className="card-title">Tỷ trọng doanh thu Shopee Shop (7 ngày)</h3>
+                <HelpCircle size={15} className="text-gray-400 cursor-help" title="So sánh tỷ trọng đóng góp doanh thu giữa 6 cửa hàng Shopee với nhau" />
+              </div>
+              <div className="chart-wrapper flex-center" style={{ height: 210 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={analytics.salesChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f3f5" />
-                    <XAxis dataKey="date" tick={{ fill: '#637381', fontSize: 10, fontWeight: 500 }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fill: '#637381', fontSize: 9 }} axisLine={false} tickLine={false} formatter={(v: any) => fmtVNDShort(v)} />
-                    <Tooltip formatter={(value: any) => [fmtVND(value), 'Doanh thu']} contentStyle={{ borderRadius: 6, border: '1px solid #dfe3e8', fontSize: 11 }} />
-                    <Bar dataKey="value" name="Doanh thu" fill="#3b82f6" radius={[4, 4, 0, 0]} maxBarSize={40} />
-                  </BarChart>
+                  <PieChart>
+                    <Pie
+                      data={dashboardData.shopRatioData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={3}
+                      dataKey="value"
+                    >
+                      {dashboardData.shopRatioData.map((entry: any, index: number) => {
+                        const colors = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6', '#6366f1', '#f43f5e', '#06b6d4'];
+                        return <Cell key={`cell-${index}`} fill={colors[index % colors.length]} />;
+                      })}
+                    </Pie>
+                    <Tooltip 
+                      formatter={(value: any, name: any, props: any) => [
+                        fmtCurrency(value) + ` (${Number(props.payload.percentage || 0).toFixed(1)}%)`,
+                        name
+                      ]}
+                      contentStyle={{ background: 'rgba(255, 255, 255, 0.9)', border: 'none', borderRadius: 10, boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
+                    />
+                    <Legend iconType="circle" iconSize={6} layout="horizontal" verticalAlign="bottom" align="center" wrapperStyle={{ fontSize: 9, fontWeight: 600, paddingTop: 10 }} />
+                  </PieChart>
                 </ResponsiveContainer>
               </div>
             </div>
 
-            {/* Employee revenue contribution */}
-            <div className="sapo-card">
-              <h4 className="sapo-card-title">Đóng góp doanh thu của nhân viên</h4>
-              <div style={{ width: '100%', height: 220 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={employeeData.chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f3f5" />
-                    <XAxis dataKey="name" tick={{ fill: '#637381', fontSize: 9, fontWeight: 600 }} axisLine={false} tickLine={false} interval={0} />
-                    <YAxis tick={{ fill: '#637381', fontSize: 9 }} axisLine={false} tickLine={false} formatter={(v: any) => fmtVNDShort(v)} />
-                    <Tooltip formatter={(value: any) => [fmtVND(value), 'Doanh thu']} contentStyle={{ borderRadius: 6, border: '1px solid #dfe3e8', fontSize: 11 }} />
-                    <Bar dataKey="value" name="Doanh thu" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={40} />
-                  </BarChart>
-                </ResponsiveContainer>
+            {/* Bar Chart: Doanh thu chi nhánh Sapo 7 ngày */}
+            <div className="glass-card chart-card">
+              <div className="card-header-with-action">
+                <h3 className="card-title">Doanh thu chi nhánh Sapo 7 ngày qua</h3>
+              </div>
+              <div className="chart-wrapper" style={{ height: 210 }}>
+                {dashboardData.branchChartData.length === 0 ? (
+                  <div className="empty-chart-fallback">Không có dữ liệu Sapo POS</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={dashboardData.branchChartData} margin={{ top: 20, right: 5, left: -25, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.04)" />
+                      <XAxis dataKey="name" tick={{ fill: '#637381', fontSize: 9, fontWeight: 600 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#637381', fontSize: 9 }} axisLine={false} tickLine={false} formatter={(v: any) => fmtNum(v / 1000000) + 'M'} />
+                      <Tooltip 
+                        formatter={(v: any) => [fmtCurrency(v), 'Doanh thu']}
+                        contentStyle={{ background: 'rgba(255, 255, 255, 0.9)', border: 'none', borderRadius: 10, boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
+                      />
+                      <Bar dataKey="value" fill="#3b82f6" radius={[6, 6, 0, 0]} maxBarSize={32} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
               </div>
             </div>
-          </div>
 
-          {/* Row 1: Branch Detailed Table */}
-          <div className="sapo-card">
-            <h4 className="sapo-card-title">🏢 Chi tiết hoạt động kinh doanh của chi nhánh</h4>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="sapo-table">
-                <thead>
-                  <tr>
-                    <th>Tên chi nhánh</th>
-                    <th style={{ textAlign: 'right' }}>Doanh thu</th>
-                    <th style={{ textAlign: 'center' }}>Đơn hàng mới</th>
-                    <th style={{ textAlign: 'right' }}>Đơn trả hàng</th>
-                    <th style={{ textAlign: 'center' }}>Đơn hủy</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr style={{ background: '#f4f6f8', fontWeight: 800 }}>
-                    <td style={{ color: '#212b36', fontWeight: 800 }}>Tổng hệ thống</td>
-                    <td style={{ textAlign: 'right', fontWeight: 800, color: '#0088ff' }}>{fmtVNDShort(totalBranchRevenue)}</td>
-                    <td style={{ textAlign: 'center', fontWeight: 800 }}>{totalBranchOrders} đơn</td>
-                    <td style={{ textAlign: 'right', fontWeight: 800, color: '#f43f5e' }}>{fmtVNDShort(totalBranchReturned)}</td>
-                    <td style={{ textAlign: 'center', fontWeight: 800 }}>{totalBranchCancelled} đơn</td>
-                  </tr>
-                  {analytics.branchRecords.map((branch: any, idx: number) => (
-                    <tr key={idx}>
-                      <td style={{ fontWeight: 600, color: '#0088ff' }}>{branch.Shop}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700, color: '#10b981' }}>{fmtVNDShort(branch.Doanh_Thu)}</td>
-                      <td style={{ textAlign: 'center', fontWeight: 600 }}>{branch.Don_Hang_Moi} đơn</td>
-                      <td style={{ textAlign: 'right', color: '#f43f5e' }}>{branch.Don_Tra_Hang > 0 ? fmtVNDShort(branch.Don_Tra_Hang) : '0'}</td>
-                      <td style={{ textAlign: 'center', color: branch.Don_Huy > 0 ? '#ff9800' : '#637381' }}>{branch.Don_Huy} đơn</td>
+            {/* Bar Chart: Đóng góp doanh thu nhân viên Sapo */}
+            <div className="glass-card chart-card">
+              <div className="card-header-with-action">
+                <h3 className="card-title">Đóng góp doanh thu của nhân viên</h3>
+              </div>
+              <div className="chart-wrapper" style={{ height: 210 }}>
+                {dashboardData.employeeChartData.length === 0 ? (
+                  <div className="empty-chart-fallback">Không có dữ liệu nhân viên Sapo</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={dashboardData.employeeChartData} margin={{ top: 20, right: 5, left: -25, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.04)" />
+                      <XAxis dataKey="name" tick={{ fill: '#637381', fontSize: 9, fontWeight: 600 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#637381', fontSize: 9 }} axisLine={false} tickLine={false} formatter={(v: any) => fmtNum(v / 1000000) + 'M'} />
+                      <Tooltip 
+                        formatter={(v: any) => [fmtCurrency(v), 'Doanh thu']}
+                        contentStyle={{ background: 'rgba(255, 255, 255, 0.9)', border: 'none', borderRadius: 10, boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
+                      />
+                      <Bar dataKey="value" fill="#10b981" radius={[6, 6, 0, 0]} maxBarSize={32} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* Row 3: Split Columns (Stacked Bar Chart for Fees + Detailed Table for Sapo) */}
+          <section className="bottom-split-grid">
+            
+            {/* Shopee stacked fees bar chart */}
+            <div className="glass-card chart-card">
+              <div className="card-header-with-action">
+                <h3 className="card-title">Cơ cấu phí sàn Shopee</h3>
+              </div>
+              <div className="chart-wrapper" style={{ height: 250 }}>
+                {dashboardData.stackedBarData.length === 0 ? (
+                  <div className="empty-chart-fallback">Không có dữ liệu phí Shopee</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={dashboardData.stackedBarData} margin={{ top: 10, right: 5, left: -20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.04)" />
+                      <XAxis dataKey="name" tick={{ fill: '#637381', fontSize: 9, fontWeight: 600 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#637381', fontSize: 9 }} axisLine={false} tickLine={false} formatter={(v: any) => fmtNum(v / 1000) + 'k'} />
+                      <Tooltip 
+                        formatter={(v: any) => fmtCurrency(v)}
+                        contentStyle={{ background: 'rgba(255, 255, 255, 0.9)', border: 'none', borderRadius: 10, boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
+                      />
+                      <Bar dataKey="Phí thanh toán" stackId="a" fill="#3b82f6" />
+                      <Bar dataKey="Phí cố định" stackId="a" fill="#f59e0b" />
+                      <Bar dataKey="Phí dịch vụ" stackId="a" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                      <Legend iconType="rect" iconSize={10} wrapperStyle={{ fontSize: 10, fontWeight: 600 }} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </div>
+
+            {/* Detailed Sapo Activities Table */}
+            <div className="glass-card table-card">
+              <div className="card-header-with-action">
+                <h3 className="card-title">Chi tiết hoạt động chi nhánh Sapo</h3>
+              </div>
+              <div className="glass-table-wrapper" style={{ maxHeight: 250, overflowY: 'auto' }}>
+                <table className="glass-table">
+                  <thead>
+                    <tr>
+                      <th>Branch Name</th>
+                      <th style={{ textAlign: 'center' }}>Tổng đơn hàng</th>
+                      <th style={{ textAlign: 'right' }}>Doanh thu</th>
+                      <th style={{ textAlign: 'right' }}>Lợi nhuận gộp</th>
+                      <th style={{ textAlign: 'right' }}>AOV</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {dashboardData.sapoTableRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} style={{ textAlign: 'center', color: '#637381' }}>Không có dữ liệu chi nhánh Sapo</td>
+                      </tr>
+                    ) : (
+                      dashboardData.sapoTableRows.map((row, idx) => (
+                        <tr key={idx}>
+                          <td className="branch-link">{row.name}</td>
+                          <td style={{ textAlign: 'center', fontWeight: 600 }}>{row.orders} đơn</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtCurrency(row.revenue)}</td>
+                          <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 600 }}>{fmtCurrency(row.profit)}</td>
+                          <td style={{ textAlign: 'right', color: '#637381' }}>{fmtCurrency(row.aov)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          </section>
 
-          {/* Row 2: Employee Detailed Table */}
-          <div className="sapo-card">
-            <h4 className="sapo-card-title">👤 Chi tiết hoạt động kinh doanh của nhân viên</h4>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="sapo-table">
-                <thead>
-                  <tr>
-                    <th>Tên nhân viên</th>
-                    <th style={{ textAlign: 'center' }}>SL đơn hàng</th>
-                    <th style={{ textAlign: 'right' }}>Tiền hàng</th>
-                    <th style={{ textAlign: 'right' }}>Tiền hàng trả lại</th>
-                    <th style={{ textAlign: 'right' }}>Tiền thuế</th>
-                    <th style={{ textAlign: 'right' }}>Phí giao hàng</th>
-                    <th style={{ textAlign: 'right' }}>Doanh thu</th>
-                    <th style={{ textAlign: 'right' }}>Lợi nhuận gộp</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr style={{ background: '#f4f6f8', fontWeight: 800 }}>
-                    <td style={{ color: '#212b36', fontWeight: 800 }}>Tổng nhân viên</td>
-                    <td style={{ textAlign: 'center', fontWeight: 800 }}>{employeeData.totalOrders}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 800 }}>{fmtVNDShort(employeeData.totalGoodsAmt)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 800 }}>{fmtVNDShort(employeeData.totalReturned)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 800 }}>{fmtVNDShort(employeeData.totalTax)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 800 }}>{fmtVNDShort(employeeData.totalDelivery)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 800, color: '#0088ff' }}>{fmtVNDShort(employeeData.totalRevenue)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 800, color: '#10b981' }}>{fmtVNDShort(employeeData.totalProfit)}</td>
-                  </tr>
-                  {employeeData.list.map((emp, idx) => (
-                    <tr key={idx}>
-                      <td style={{ fontWeight: 600, color: '#0088ff' }}>{emp.name}</td>
-                      <td style={{ textAlign: 'center', fontWeight: 600 }}>{emp.orders}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtVNDShort(emp.goodsAmt)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtVNDShort(emp.returned)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtVNDShort(emp.tax)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmtVNDShort(emp.delivery)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtVNDShort(emp.revenue)}</td>
-                      <td style={{ textAlign: 'right', fontWeight: 700, color: emp.profit > 0 ? '#10b981' : '#637381' }}>{fmtVNDShort(emp.profit)}</td>
+          {/* Row 4: Full-width Sapo Employee detailed table */}
+          <section className="full-width-table-section" style={{ marginBottom: 24 }}>
+            <div className="glass-card table-card">
+              <div className="card-header-with-action">
+                <h3 className="card-title">👤 Chi tiết hoạt động kinh doanh của nhân viên</h3>
+              </div>
+              <div className="glass-table-wrapper">
+                <table className="glass-table">
+                  <thead>
+                    <tr>
+                      <th>Tên nhân viên</th>
+                      <th style={{ textAlign: 'center' }}>SL đơn hàng</th>
+                      <th style={{ textAlign: 'right' }}>Tiền hàng</th>
+                      <th style={{ textAlign: 'right' }}>Tiền hàng trả lại</th>
+                      <th style={{ textAlign: 'right' }}>Tiền thuế</th>
+                      <th style={{ textAlign: 'right' }}>Phí giao hàng</th>
+                      <th style={{ textAlign: 'right' }}>Doanh thu</th>
+                      <th style={{ textAlign: 'right' }}>Lợi nhuận gộp</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Unified Pipeline & Stock widgets */}
-          <div className="sapo-split-layout">
-            {/* Pipeline */}
-            <div className="sapo-card">
-              <h4 className="sapo-card-title">📦 Đơn hàng chờ xử lý (OMNICHANNEL PIPELINE)</h4>
-              <div className="sapo-pipeline-grid">
-                <div className="sapo-pipeline-item">
-                  <div className="sapo-pipeline-num">{analytics.pendingApproval}</div>
-                  <div className="sapo-pipeline-label">Chờ duyệt</div>
-                </div>
-                <div className="sapo-pipeline-item">
-                  <div className="sapo-pipeline-num">{analytics.pendingPayment}</div>
-                  <div className="sapo-pipeline-label">Chờ thanh toán</div>
-                </div>
-                <div className="sapo-pipeline-item">
-                  <div className="sapo-pipeline-num">{analytics.pendingPacking}</div>
-                  <div className="sapo-pipeline-label">Chờ đóng gói</div>
-                </div>
-                <div className="sapo-pipeline-item">
-                  <div className="sapo-pipeline-num">{analytics.pendingPickup}</div>
-                  <div className="sapo-pipeline-label">Chờ lấy hàng</div>
-                </div>
-                <div className="sapo-pipeline-item">
-                  <div className="sapo-pipeline-num">{analytics.shipping}</div>
-                  <div className="sapo-pipeline-label">Đang giao hàng</div>
-                </div>
-                <div className="sapo-pipeline-item">
-                  <div className="sapo-pipeline-num">0</div>
-                  <div className="sapo-pipeline-label">Hủy giao</div>
-                </div>
+                  </thead>
+                  <tbody>
+                    <tr style={{ background: 'rgba(241, 245, 249, 0.6)', fontWeight: 800 }}>
+                      <td style={{ color: '#0f172a', fontWeight: 800 }}>Tổng nhân viên</td>
+                      <td style={{ textAlign: 'center', fontWeight: 800 }}>{fmtNum(dashboardData.employeeTotals.orders)} đơn</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800 }}>{fmtCurrency(dashboardData.employeeTotals.goodsAmt)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800, color: '#ef4444' }}>{fmtCurrency(dashboardData.employeeTotals.returned)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800 }}>{fmtCurrency(dashboardData.employeeTotals.tax)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800 }}>{fmtCurrency(dashboardData.employeeTotals.delivery)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800, color: '#3b82f6' }}>{fmtCurrency(dashboardData.employeeTotals.revenue)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 800, color: '#10b981' }}>{fmtCurrency(dashboardData.employeeTotals.profit)}</td>
+                    </tr>
+                    {dashboardData.sapoEmployeeRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} style={{ textAlign: 'center', color: '#637381' }}>Không có dữ liệu nhân viên Sapo</td>
+                      </tr>
+                    ) : (
+                      dashboardData.sapoEmployeeRows.map((row, idx) => (
+                        <tr key={idx}>
+                          <td style={{ fontWeight: 600, color: '#3b82f6' }}>{row.name}</td>
+                          <td style={{ textAlign: 'center', fontWeight: 600 }}>{row.orders} đơn</td>
+                          <td style={{ textAlign: 'right' }}>{fmtCurrency(row.goodsAmt)}</td>
+                          <td style={{ textAlign: 'right', color: '#ef4444' }}>{row.returned > 0 ? fmtCurrency(row.returned) : '0 đ'}</td>
+                          <td style={{ textAlign: 'right' }}>{fmtCurrency(row.tax)}</td>
+                          <td style={{ textAlign: 'right' }}>{fmtCurrency(row.delivery)}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtCurrency(row.revenue)}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700, color: row.profit > 0 ? '#10b981' : '#64748b' }}>{fmtCurrency(row.profit)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
+          </section>
 
-            {/* Warehouse Capitalization */}
-            <div className="sapo-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-              <h4 className="sapo-card-title">🏬 Thông tin kho đa chi nhánh</h4>
-              <div className="space-y-4" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: '#fff5e6', borderRadius: 6, borderLeft: '4px solid #b76e00' }}>
-                  <div style={{ fontSize: 10, color: '#b76e00', fontWeight: 700 }}>SẢN PHẨM DƯỚI ĐỊNH MỨC: 131 sản phẩm</div>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: '#e0f2fe', borderRadius: 6, borderLeft: '4px solid #0369a1' }}>
-                  <div style={{ fontSize: 10, color: '#0369a1', fontWeight: 700 }}>TỒN KHO CHI NHÁNH: 340,712 cái</div>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: '#e3fcef', borderRadius: 6, borderLeft: '4px solid #0a8f4c' }}>
-                  <div style={{ fontSize: 10, color: '#0a8f4c', fontWeight: 700 }}>GIÁ TRỊ VỐN TỒN KHO: {fmtVND(25415988183)}</div>
-                </div>
+          {/* Row 5: Full-width Shopee detailed table */}
+          <section className="full-width-table-section">
+            <div className="glass-card table-card">
+              <div className="card-header-with-action">
+                <h3 className="card-title">Chi tiết tài chính Shopee Shop</h3>
+              </div>
+              <div className="glass-table-wrapper">
+                <table className="glass-table">
+                  <thead>
+                    <tr>
+                      <th>Cửa hàng Shopee</th>
+                      <th style={{ textAlign: 'right' }}>Tổng doanh số (Gross)</th>
+                      <th style={{ textAlign: 'right' }}>Phí cố định</th>
+                      <th style={{ textAlign: 'right' }}>Phí dịch vụ</th>
+                      <th style={{ textAlign: 'right' }}>Doanh thu thực nhận</th>
+                      <th style={{ textAlign: 'right' }}>Phí thanh toán</th>
+                      <th style={{ textAlign: 'center' }}>Tổng đơn hàng</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dashboardData.shopeeTableRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} style={{ textAlign: 'center', color: '#637381' }}>Không có dữ liệu cửa hàng Shopee</td>
+                      </tr>
+                    ) : (
+                      dashboardData.shopeeTableRows.map((row, idx) => (
+                        <tr key={idx}>
+                          <td className="shop-link">{row.name}</td>
+                          <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtCurrency(row.grossSales)}</td>
+                          <td style={{ textAlign: 'right', color: '#f59e0b' }}>{fmtCurrency(row.commissionFee)}</td>
+                          <td style={{ textAlign: 'right', color: '#ef4444' }}>{fmtCurrency(row.shippingFee)}</td>
+                          <td style={{ textAlign: 'right', color: '#10b981', fontWeight: 700 }}>{fmtCurrency(row.netRevenue)}</td>
+                          <td style={{ textAlign: 'right' }}>{fmtCurrency(row.paymentFee)}</td>
+                          <td style={{ textAlign: 'center', fontWeight: 600 }}>{row.orders} đơn</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
-          </div>
+          </section>
+
         </div>
       )}
     </div>
